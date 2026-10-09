@@ -76,6 +76,9 @@ def main() -> int:
     parser.add_argument("--no-browser", action="store_true", help="Khong tu mo trinh duyet")
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
+    sys.path.insert(0, str(ROOT / "src"))
+    from ai_company.application.local_env import load_local_env
+    load_local_env(ROOT / ".env")
     if sys.version_info < (3, 12):
         parser.error("Can Python 3.12 tro len. Hay dung Python da cai du an.")
     if not 1 <= args.port <= 65535:
@@ -85,7 +88,12 @@ def main() -> int:
     print(f"Python dang dung: {sys.executable}", flush=True)
     ensure_dependencies()
     if args.check:
-        print("Thu vien Lite da san sang. Khong can API key de chay mock.", flush=True)
+        from ai_company.application.provider_config import load_gemini_prototype_settings
+        provider = load_gemini_prototype_settings()
+        if provider.enabled:
+            print(f"Thu vien Lite va cau hinh Gemini {provider.model} da san sang.", flush=True)
+        else:
+            print("Thu vien Lite da san sang. AI that dang tat; mock khong can API key.", flush=True)
         return 0
 
     environment = os.environ.copy()

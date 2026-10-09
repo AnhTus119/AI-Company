@@ -10,6 +10,7 @@
 - Provider assignment/fallback and category-based Cloud Boundary checks.
 - Initial SQLAlchemy tables for campaigns, stories, chapters, gate decisions, artifacts, and audit events.
 - Immutable approval records for policy and model-assignment versions, plus provider-call and cost ledgers tied to a durable task attempt. A provider call cannot start until both snapshots are approved/active; completion is one-way, uses redacted error codes, records usage/latency, and rejects credential-shaped ledger fields.
+- Daily budget policy/reservation/settlement is enforced before external work. The bounded Gemini REST adapter and real-blueprint handler remain disabled by default; after explicit local setup they can create and validate one real Story Bible, 20-chapter plan and Hook Contract while recording model, usage, latency and cost. This does not yet generate the 20 chapter bodies.
 - Durable task and task-attempt records with idempotent creation, one active worker lease, safe completion, and recovery hold requiring confirmation.
 - Lite profile configuration, SQLite WAL/foreign-key/durability settings, local application-data default, atomic task claim, startup recovery queue, a single-worker database poller, and resource-based worker cap. The Standard profile remains a configuration target pending service integration.
 - Offline, deterministic mock path: draft story → idempotent blueprint task with a synthetic Story Bible, 20 objectives and hook contract → sequential 20-chapter fixture task. Both results survive database reopen and remain separate from accepted story state and Production KPI.
@@ -23,7 +24,7 @@
 - API restart now holds expired task leases only, so restarting the API does not interrupt a worker whose lease is still valid. Recovery confirmation remains explicit.
 - Frozen Alembic migration for those initial tables.
 - Local API for health, draft campaign/story creation, story view, and guarded final review.
-- Automated tests cover dashboard state, file integrity, cloud-startup guard, mock package construction/retry, Lite schema upgrade, and the governance/provider-cost ledgers. On 2026-10-09 the current revision passed **43 default tests, with 1 opt-in HTTP test skipped**; `launch_local.py --check` also passed. A separate opt-in HTTP rerun was skipped because the test process saw less than 768 MB RAM available. That process test previously passed on the 4 GB PC before login removal; the user's real double-click flow still needs confirmation. PostgreSQL, RabbitMQ, and Windows startup on a fresh PC remain unverified.
+- Automated tests cover dashboard state, file integrity, cloud-startup guard, mock package construction/retry, Lite schema upgrades, budget enforcement, provider contract, real-blueprint orchestration, and governance/provider-cost ledgers. On 2026-10-09 the current revision passed **52 default tests, with 1 opt-in HTTP test skipped**; `launch_local.py --check` and the no-network provider-setup smoke test also passed. A separate opt-in HTTP rerun was skipped because the test process saw less than 768 MB RAM available. The user's real double-click and first authorized Gemini call still need confirmation. PostgreSQL, RabbitMQ, and Windows startup on a fresh PC remain unverified.
 
 ## Remaining before Phase 7 one-story test
 

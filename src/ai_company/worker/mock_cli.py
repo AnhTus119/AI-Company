@@ -8,9 +8,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from threading import Event
 
-from ai_company.adapters.database import TaskRepository, initialize_lite_schema, make_session_factory
+from ai_company.adapters.database import (
+    BudgetRepository, GovernanceRepository, StoryRepository, TaskRepository,
+    initialize_lite_schema, make_session_factory,
+)
+from ai_company.application.provider_config import load_gemini_prototype_settings
+from ai_company.application.real_blueprint import RealBlueprintHandler
 from ai_company.application.runtime import RuntimeProfile, load_runtime_settings
 from ai_company.worker.lite import make_mock_lite_worker
+from ai_company.providers.gemini import GeminiStructuredProvider
 
 
 def main() -> None:
@@ -29,9 +35,21 @@ def main() -> None:
     tasks = TaskRepository(sessions)
     tasks.hold_interrupted_tasks(datetime.now(timezone.utc))
     output_root = Path(os.environ.get("ARTIFACT_ROOT") or settings.data_dir / "artifacts")
-    worker = make_mock_lite_worker(sessions, "mock-cli", output_root=output_root)
+    worker_id = "lite-cli"
+    worker = make_mock_lite_worker(sessions, worker_id, output_root=output_root)
+    provider_settings = load_gemini_prototype_settings()
+    if provider_settings.enabled:
+        provider = GeminiStructuredProvider(
+            provider_settings.api_key, provider_settings.model,
+            timeout_seconds=provider_settings.timeout_seconds,
+        )
+        worker.handlers["real_blueprint"] = RealBlueprintHandler(
+            StoryRepository(sessions), tasks, GovernanceRepository(sessions),
+            BudgetRepository(sessions), provider, provider_settings, worker_id,
+        )
     if args.loop:
-        print("mock worker polling; press Ctrl+C to stop", flush=True)
+        mode = "mock + approved real AI" if provider_settings.enabled else "mock only"
+        print(f"Lite worker polling ({mode}); press Ctrl+C to stop", flush=True)
         try:
             worker.run_forever(
                 Event(), provider_slots=1, budget_slots=1,

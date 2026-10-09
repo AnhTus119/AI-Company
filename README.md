@@ -14,6 +14,7 @@ Hướng Vercel/Render đã **hủy**. Đây là web **chạy trên từng máy*
 - Kiểm soát nhận việc theo mục tiêu ngày, hàng chờ duyệt, khả năng xử lý an toàn và ngân sách.
 - Quy tắc Cloud Boundary và chọn provider/fallback theo assignment đã duyệt.
 - Bản ghi policy/model-assignment bất biến cùng sổ provider/cost gắn với task attempt; chưa có provider thật nhưng nền audit và chặn gọi khi chưa duyệt đã sẵn sàng.
+- Adapter Gemini prototype bị tắt mặc định có thể tạo một Story Bible thật, kế hoạch 20 chương và Hook Contract sau khi chủ dự án tự thêm key, model, rate card, budget và chạy bước phê duyệt local. Xem [hướng dẫn Gemini](docs/GEMINI_PROTOTYPE_SETUP.md).
 - Hai profile dùng chung logic: `lite` dùng SQLite cục bộ trên máy 4 GB; `standard` dành cho PostgreSQL/RabbitMQ khi máy có đủ tài nguyên.
 - Các bảng đầu tiên cùng migration PostgreSQL, repository và API tạo campaign/story nháp, xem story, duyệt story đã sẵn sàng.
 - Task bền vững với idempotency key, lease, checkpoint và trạng thái chờ xác nhận sau gián đoạn; đã có lõi worker Lite thăm dò database, nhưng chưa nối thành tiến trình vận hành với các handler sản xuất story.

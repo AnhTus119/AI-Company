@@ -62,7 +62,7 @@
     const message = document.getElementById('message');
     const labels = {queued:'Đang chờ worker', running:'Đang xử lý', completed:'Hoàn tất',
       technical_failure:'Lỗi kỹ thuật', awaiting_recovery_confirmation:'Cần xác nhận khôi phục'};
-    const names = [['mock_blueprint','Dàn ý'], ['mock_chapters','20 chương'], ['mock_package','Gói 5 tệp']];
+    const names = [['real_blueprint','Dàn ý AI thật'], ['mock_blueprint','Dàn ý mock'], ['mock_chapters','20 chương mock'], ['mock_package','Gói 5 tệp mock']];
     function element(tag, className, value) {
       const node = document.createElement(tag);
       if (className) node.className = className;
@@ -103,15 +103,21 @@
       }
       node.append(steps);
       const tasks = story.tasks;
+      const buttons = [];
+      if (!tasks.real_blueprint) buttons.push(actionButton('Tạo dàn ý AI thật (dùng quota/chi phí)', `/stories/${story.id}/real-blueprint`));
       let button;
-      if (!tasks.mock_blueprint) button = actionButton('Tạo dàn ý', `/stories/${story.id}/mock-blueprint`);
+      if (!tasks.mock_blueprint) button = actionButton('Tạo dàn ý mock', `/stories/${story.id}/mock-blueprint`);
       else if (tasks.mock_blueprint.status === 'completed' && !tasks.mock_chapters)
         button = actionButton('Tạo 20 chương', `/stories/${story.id}/mock-chapters`);
       else if (tasks.mock_chapters?.status === 'completed' && !tasks.mock_package)
         button = actionButton('Dựng gói 5 tệp', `/stories/${story.id}/mock-package`);
       else if (tasks.mock_package?.status === 'technical_failure' && tasks.mock_package.attempt_no < tasks.mock_package.attempt_limit)
         button = actionButton('Thử lại gói mock', `/stories/${story.id}/mock-package/${tasks.mock_package.task_id}/retry`);
-      if (button) { const wrap = element('p'); wrap.append(button); node.append(wrap); }
+      if (button) buttons.push(button);
+      if (buttons.length) { const wrap = element('p'); for (const item of buttons) wrap.append(item, ' '); node.append(wrap); }
+      if (tasks.real_blueprint?.status === 'completed') {
+        node.append(element('div','path',`Dàn ý AI thật: ${tasks.real_blueprint.title || 'đã hoàn tất'}. Task: ${tasks.real_blueprint.task_id}`));
+      }
       if (tasks.mock_package?.directory) {
         const packageTask = tasks.mock_package;
         const base = `/stories/${story.id}/mock-package/${packageTask.task_id}/files/`;

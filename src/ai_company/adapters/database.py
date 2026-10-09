@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -48,7 +50,7 @@ class Base(DeclarativeBase):
 
 
 JSON_DOCUMENT = JSON().with_variant(JSONB(), "postgresql")
-LITE_SCHEMA_VERSION = 2
+LITE_SCHEMA_VERSION = 3
 
 
 def utcnow() -> datetime:
@@ -248,6 +250,54 @@ class CostLedgerRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class BudgetPolicyRow(Base):
+    __tablename__ = "budget_policies"
+    __table_args__ = (CheckConstraint("daily_limit_minor > 0"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    version: Mapped[str] = mapped_column(String(100), unique=True)
+    status: Mapped[str] = mapped_column(String(24), default="draft")
+    currency: Mapped[str] = mapped_column(String(3))
+    daily_limit_minor: Mapped[int] = mapped_column(Integer)
+    timezone_name: Mapped[str] = mapped_column(String(64), default="Asia/Ho_Chi_Minh")
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class DailyBudgetRow(Base):
+    __tablename__ = "daily_budgets"
+    __table_args__ = (
+        UniqueConstraint("policy_id", "local_day"),
+        CheckConstraint("reserved_minor >= 0"),
+        CheckConstraint("spent_minor >= 0"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    policy_id: Mapped[UUID] = mapped_column(ForeignKey("budget_policies.id"))
+    local_day: Mapped[date] = mapped_column(Date)
+    reserved_minor: Mapped[int] = mapped_column(Integer, default=0)
+    spent_minor: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class BudgetReservationRow(Base):
+    __tablename__ = "budget_reservations"
+    __table_args__ = (
+        CheckConstraint("estimated_minor >= 0"),
+        CheckConstraint("actual_minor IS NULL OR actual_minor >= 0"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    daily_budget_id: Mapped[UUID] = mapped_column(ForeignKey("daily_budgets.id"), index=True)
+    task_attempt_id: Mapped[UUID] = mapped_column(ForeignKey("task_attempts.id"), index=True)
+    workload: Mapped[str] = mapped_column(String(100))
+    estimated_minor: Mapped[int] = mapped_column(Integer)
+    actual_minor: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="reserved")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 def make_session_factory(database_url: str) -> sessionmaker[Session]:
     engine = create_engine(database_url, pool_pre_ping=True)
     if engine.dialect.name == "sqlite":
@@ -276,7 +326,8 @@ def initialize_lite_schema(sessions: sessionmaker[Session]) -> None:
         Base.metadata.create_all(engine)
         with engine.begin() as connection:
             connection.exec_driver_sql(f"PRAGMA user_version={LITE_SCHEMA_VERSION}")
-    elif version == 1:
+        return
+    if version == 1:
         for table in (
             PolicyVersionRow.__table__,
             ModelAssignmentVersionRow.__table__,
@@ -285,8 +336,19 @@ def initialize_lite_schema(sessions: sessionmaker[Session]) -> None:
         ):
             table.create(engine, checkfirst=True)
         with engine.begin() as connection:
+            connection.exec_driver_sql("PRAGMA user_version=2")
+        version = 2
+    if version == 2:
+        for table in (
+            BudgetPolicyRow.__table__,
+            DailyBudgetRow.__table__,
+            BudgetReservationRow.__table__,
+        ):
+            table.create(engine, checkfirst=True)
+        with engine.begin() as connection:
             connection.exec_driver_sql(f"PRAGMA user_version={LITE_SCHEMA_VERSION}")
-    elif version != LITE_SCHEMA_VERSION:
+        version = LITE_SCHEMA_VERSION
+    if version != LITE_SCHEMA_VERSION:
         raise DomainError(f"Unsupported lite database schema version: {version}.")
 
 
@@ -578,17 +640,30 @@ class TaskRepository:
                 raise DomainError("Task does not exist.")
             return created_at if created_at.tzinfo is not None else created_at.replace(tzinfo=timezone.utc)
 
+    def get_active_attempt_id(self, task_id: UUID, worker_id: str) -> UUID:
+        with self.sessions() as session:
+            task = session.get(TaskRow, task_id)
+            if task is None or task.status != "running" or task.lease_owner != worker_id:
+                raise DomainError("This worker does not hold the active task attempt.")
+            attempt_id = session.scalar(select(TaskAttemptRow.id).where(
+                TaskAttemptRow.task_id == task_id,
+                TaskAttemptRow.attempt_no == task.attempt_no,
+            ))
+            if attempt_id is None:
+                raise DomainError("The active task attempt record is missing.")
+            return attempt_id
+
     def list_mock_task_statuses(self, story_ids: tuple[UUID, ...]) -> dict[str, dict]:
         if not story_ids:
             return {}
-        task_types = ("mock_blueprint", "mock_chapters", "mock_package")
+        task_types = ("mock_blueprint", "mock_chapters", "mock_package", "real_blueprint")
         with self.sessions() as session:
             rows = session.scalars(select(TaskRow).where(
                 TaskRow.story_id.in_(story_ids), TaskRow.task_type.in_(task_types),
             )).all()
             result: dict[str, dict] = {}
             for row in rows:
-                result.setdefault(str(row.story_id), {})[row.task_type] = {
+                status = {
                     "task_id": str(row.id),
                     "status": row.status,
                     "attempt_no": row.attempt_no,
@@ -596,6 +671,9 @@ class TaskRepository:
                     "directory": row.checkpoint.get("directory")
                     if row.task_type == "mock_package" and row.status == "completed" and row.checkpoint else None,
                 }
+                if row.task_type == "real_blueprint" and row.status == "completed" and row.checkpoint:
+                    status["title"] = row.checkpoint.get("title")
+                result.setdefault(str(row.story_id), {})[row.task_type] = status
             return result
 
     def get_task_result(self, task_id: UUID, story_id: UUID, *, expected_type: str) -> dict:
@@ -770,6 +848,18 @@ class GovernanceRepository:
     def activate_assignment_version(self, version: str, approved_by: str, at: datetime) -> UUID:
         return self._approve_version(ModelAssignmentVersionRow, version, approved_by, at, activate=True)
 
+    def approved_context(self, policy_version: str, assignment_version: str) -> tuple[dict, dict]:
+        with self.sessions() as session:
+            policy = session.scalar(select(PolicyVersionRow).where(PolicyVersionRow.version == policy_version))
+            assignment = session.scalar(
+                select(ModelAssignmentVersionRow).where(ModelAssignmentVersionRow.version == assignment_version)
+            )
+            if policy is None or policy.status != "approved":
+                raise DomainError("Provider calls require an approved policy snapshot.")
+            if assignment is None or assignment.status != "active":
+                raise DomainError("Provider calls require an active model-assignment snapshot.")
+            return dict(policy.payload), dict(assignment.assignments)
+
     def _approve_version(self, row_type, version: str, approved_by: str, at: datetime, *, activate: bool) -> UUID:
         approved_at = _require_aware(at)
         if not approved_by.strip():
@@ -888,4 +978,129 @@ class GovernanceRepository:
             if cost is None:
                 raise DomainError("Provider call cost reservation is missing.")
             cost.actual_minor = actual_minor
+
+
+class BudgetRepository:
+    """Reserve a conservative upper bound before any external provider call."""
+
+    def __init__(self, sessions: sessionmaker[Session]):
+        self.sessions = sessions
+
+    def create_policy(
+        self, version: str, currency: str, daily_limit_minor: int, timezone_name: str,
+    ) -> UUID:
+        if not version.strip() or not re.fullmatch(r"[A-Z]{3}", currency) or daily_limit_minor <= 0:
+            raise DomainError("Budget policy needs a version, currency, and positive daily limit.")
+        try:
+            ZoneInfo(timezone_name)
+        except ZoneInfoNotFoundError as exc:
+            raise DomainError("Budget policy timezone is unknown.") from exc
+        try:
+            with self.sessions.begin() as session:
+                row = BudgetPolicyRow(
+                    version=version.strip(), currency=currency,
+                    daily_limit_minor=daily_limit_minor, timezone_name=timezone_name,
+                )
+                session.add(row)
+                session.flush()
+                return row.id
+        except IntegrityError as exc:
+            raise DomainError(f"Budget policy already exists: {version.strip()}.") from exc
+
+    def activate_policy(self, version: str, approved_by: str, at: datetime) -> UUID:
+        approved_at = _require_aware(at)
+        if not approved_by.strip():
+            raise DomainError("Budget approval requires an actor.")
+        with self.sessions.begin() as session:
+            row = session.scalar(select(BudgetPolicyRow).where(BudgetPolicyRow.version == version).with_for_update())
+            if row is None:
+                raise DomainError("Budget policy does not exist.")
+            if row.status != "draft":
+                raise DomainError("An active budget policy is immutable.")
+            row.status = "active"
+            row.approved_by = approved_by.strip()
+            row.approved_at = approved_at
+            session.add(AuditEventRow(
+                entity_type="budget_policy", entity_id=row.id,
+                action="activated", outcome="ok",
+                details={"version": row.version, "currency": row.currency},
+            ))
+            return row.id
+
+    def reserve(
+        self, version: str, task_attempt_id: UUID, workload: str,
+        estimated_minor: int, at: datetime,
+    ) -> UUID:
+        instant = _require_aware(at)
+        if not workload.strip() or estimated_minor < 0:
+            raise DomainError("Budget reservation needs a workload and non-negative estimate.")
+        with self.sessions.begin() as session:
+            policy = session.scalar(select(BudgetPolicyRow).where(BudgetPolicyRow.version == version).with_for_update())
+            if policy is None or policy.status != "active":
+                raise DomainError("Provider calls require an active budget policy.")
+            if session.get(TaskAttemptRow, task_attempt_id) is None:
+                raise DomainError("Budget reservations must belong to a persisted task attempt.")
+            local_day = instant.astimezone(ZoneInfo(policy.timezone_name)).date()
+            daily = session.scalar(
+                select(DailyBudgetRow)
+                .where(DailyBudgetRow.policy_id == policy.id, DailyBudgetRow.local_day == local_day)
+                .with_for_update()
+            )
+            if daily is None:
+                daily = DailyBudgetRow(policy_id=policy.id, local_day=local_day)
+                session.add(daily)
+                session.flush()
+            if daily.spent_minor + daily.reserved_minor + estimated_minor > policy.daily_limit_minor:
+                raise DomainError("Daily provider budget would be exceeded.")
+            daily.reserved_minor += estimated_minor
+            reservation = BudgetReservationRow(
+                daily_budget_id=daily.id,
+                task_attempt_id=task_attempt_id,
+                workload=workload.strip(),
+                estimated_minor=estimated_minor,
+            )
+            session.add(reservation)
+            session.flush()
+            return reservation.id
+
+    def settle(self, reservation_id: UUID, actual_minor: int, at: datetime) -> None:
+        settled_at = _require_aware(at)
+        if actual_minor < 0:
+            raise DomainError("Actual provider cost cannot be negative.")
+        with self.sessions.begin() as session:
+            reservation = session.scalar(
+                select(BudgetReservationRow).where(BudgetReservationRow.id == reservation_id).with_for_update()
+            )
+            if reservation is None or reservation.status != "reserved":
+                raise DomainError("Budget reservation is not open.")
+            if actual_minor > reservation.estimated_minor:
+                raise DomainError("Actual provider cost exceeded the reserved upper bound.")
+            daily = session.scalar(
+                select(DailyBudgetRow).where(DailyBudgetRow.id == reservation.daily_budget_id).with_for_update()
+            )
+            if daily is None or daily.reserved_minor < reservation.estimated_minor:
+                raise DomainError("Daily budget accounting is inconsistent.")
+            daily.reserved_minor -= reservation.estimated_minor
+            daily.spent_minor += actual_minor
+            reservation.actual_minor = actual_minor
+            reservation.status = "settled"
+            reservation.settled_at = settled_at
+
+    def release(self, reservation_id: UUID, at: datetime) -> None:
+        released_at = _require_aware(at)
+        with self.sessions.begin() as session:
+            reservation = session.scalar(
+                select(BudgetReservationRow).where(BudgetReservationRow.id == reservation_id).with_for_update()
+            )
+            if reservation is None or reservation.status != "reserved":
+                raise DomainError("Budget reservation is not open.")
+            daily = session.scalar(
+                select(DailyBudgetRow).where(DailyBudgetRow.id == reservation.daily_budget_id).with_for_update()
+            )
+            if daily is None or daily.reserved_minor < reservation.estimated_minor:
+                raise DomainError("Daily budget accounting is inconsistent.")
+            daily.reserved_minor -= reservation.estimated_minor
+            reservation.actual_minor = 0
+            reservation.status = "released"
+            reservation.settled_at = released_at
 

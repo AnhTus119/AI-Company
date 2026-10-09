@@ -16,6 +16,8 @@ from ai_company.adapters.database import TaskRepository, StoryRepository, initia
 from ai_company.application.mock_chapters import mock_blueprint_key, mock_chapters_key
 from ai_company.application.mock_export import verified_mock_artifact
 from ai_company.application.mock_package import mock_package_key
+from ai_company.application.provider_config import load_gemini_prototype_settings
+from ai_company.application.real_blueprint import real_blueprint_key
 from ai_company.application.runtime import RuntimeProfile, load_runtime_settings
 from ai_company.domain.workflow import DomainError, SourceType, StorySnapshot
 
@@ -137,6 +139,31 @@ def create_app(
         except DomainError as exc:
             raise HTTPException(404, str(exc)) from exc
         return result
+
+    @app.post("/stories/{story_id}/real-blueprint", status_code=202)
+    def queue_real_blueprint(story_id: UUID) -> dict:
+        try:
+            provider_settings = load_gemini_prototype_settings()
+            if not provider_settings.enabled:
+                raise DomainError("Real AI is disabled; complete the local provider setup first.")
+            story = repository.get_story(story_id)
+            if story.stage.value != "draft" or story.source_type != SourceType.USER_IDEA:
+                raise DomainError("Real blueprint accepts user-idea drafts only.")
+            task_id = tasks.create_task(
+                story_id, "real_blueprint", real_blueprint_key(story_id),
+                datetime.now(timezone.utc), attempt_limit=1,
+            )
+            result = tasks.get_task_result(task_id, story_id, expected_type="real_blueprint")
+        except DomainError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"task_id": str(task_id), "status": result["status"], "is_mock": False}
+
+    @app.get("/stories/{story_id}/real-blueprint/{task_id}")
+    def get_real_blueprint(story_id: UUID, task_id: UUID) -> dict:
+        try:
+            return tasks.get_task_result(task_id, story_id, expected_type="real_blueprint")
+        except DomainError as exc:
+            raise HTTPException(404, str(exc)) from exc
 
     @app.post("/stories/{story_id}/mock-chapters", status_code=202)
     def queue_mock_chapters(story_id: UUID) -> dict:
