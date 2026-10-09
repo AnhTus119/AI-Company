@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Company · Bản thử Lite</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background:#f4f6f8; color:#192534; }
+    * { box-sizing:border-box; }
+    body { margin:0; }
+    header { background:#14263b; color:#fff; padding:28px max(20px,calc((100vw - 1000px)/2)); }
+    h1 { margin:0 0 7px; font-size:1.65rem; }
+    header p { margin:0; color:#ced9e5; line-height:1.5; }
+    main { max-width:1000px; margin:24px auto; padding:0 20px 50px; }
+    .notice { background:#e7f1ff; border-left:4px solid #3677c7; padding:13px 16px; border-radius:8px; line-height:1.5; }
+    .panel, .card { background:#fff; border:1px solid #dbe3ea; border-radius:12px; padding:20px; margin-top:18px; box-shadow:0 2px 8px #1726380a; }
+    h2 { margin:0 0 14px; font-size:1.2rem; }
+    label { display:block; font-weight:600; margin-bottom:8px; }
+    textarea { width:100%; min-height:92px; resize:vertical; border:1px solid #aab7c5; border-radius:8px; padding:11px; font:inherit; }
+    button { border:0; border-radius:8px; background:#1766b0; color:white; font:inherit; font-weight:600; padding:10px 15px; cursor:pointer; }
+    button:hover { background:#0e518f; }
+    button:disabled { opacity:.55; cursor:wait; }
+    .subtle { color:#5c6d7c; font-size:.9rem; }
+    .row { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; flex-wrap:wrap; }
+    .idea { margin:8px 0 14px; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .steps { display:flex; flex-wrap:wrap; gap:9px; align-items:center; }
+    .step { border:1px solid #d5dfe7; padding:8px 10px; border-radius:8px; background:#f7f9fb; font-size:.91rem; }
+    .step strong { display:block; margin-bottom:3px; }
+    .status { font-weight:600; }
+    .done { color:#167347; }
+    .waiting { color:#9b6500; }
+    .error { color:#a63131; }
+    .path { margin-top:14px; padding:10px; background:#f2f5f8; border-radius:8px; overflow-wrap:anywhere; font-size:.9rem; }
+    .files { margin-top:12px; display:flex; flex-wrap:wrap; gap:8px 16px; }
+    .files a { color:#155c9e; font-weight:600; }
+    #message { min-height:1.5em; margin:12px 0; font-weight:600; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>AI Company · Bản thử Lite</h1>
+    <p>Tạo một story thử nghiệm từ ý tưởng của bạn. Toàn bộ kết quả hiện tại là mock, chưa dùng model thật và không được tính là sản phẩm sẵn sàng xuất bản.</p>
+  </header>
+  <main>
+    <div class="notice" id="runtime-notice">Giữ cửa sổ Start-AI-Company mở để web và worker tiếp tục chạy. Bạn có thể đóng trang này; task vẫn nằm trong hàng chờ. Hệ thống tự hoãn bước dựng video nếu RAM khả dụng thấp.</div>
+    <section class="panel">
+      <h2>Story mới</h2>
+      <form id="create-form">
+        <label for="idea">Ý tưởng truyện (dùng dữ liệu không nhạy cảm)</label>
+        <textarea id="idea" required maxlength="5000" placeholder="Ví dụ: Một bí mật gia đình được hé lộ sau cuộc gặp bất ngờ..."></textarea>
+        <p><button id="create-button" type="submit">Tạo bản nháp</button></p>
+      </form>
+    </section>
+    <div id="message" role="status" aria-live="polite"></div>
+    <section class="panel">
+      <div class="row"><h2>Story gần đây</h2><button id="refresh-button" type="button">Làm mới</button></div>
+      <div id="stories"><p class="subtle">Đang tải...</p></div>
+    </section>
+  </main>
+  <script>
+    const list = document.getElementById('stories');
+    const message = document.getElementById('message');
+    const labels = {queued:'Đang chờ worker', running:'Đang xử lý', completed:'Hoàn tất',
+      technical_failure:'Lỗi kỹ thuật', awaiting_recovery_confirmation:'Cần xác nhận khôi phục'};
+    const names = [['mock_blueprint','Dàn ý'], ['mock_chapters','20 chương'], ['mock_package','Gói 5 tệp']];
+    function element(tag, className, value) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (value !== undefined) node.textContent = value;
+      return node;
+    }
+    async function request(path, payload) {
+      const options = payload === undefined ? {} : {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)};
+      const response = await fetch(path, options);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || 'Không thực hiện được yêu cầu.');
+      return data;
+    }
+    async function action(path) {
+      message.textContent = 'Đang gửi yêu cầu...';
+      try { await request(path, {}); message.textContent = 'Đã đưa task vào hàng chờ.'; await refresh(); }
+      catch (error) { message.textContent = error.message; }
+    }
+    function actionButton(text, path) {
+      const button = element('button', '', text);
+      button.type = 'button';
+      button.addEventListener('click', () => action(path));
+      return button;
+    }
+    function card(story) {
+      const node = element('article','card');
+      const head = element('div','row');
+      head.append(element('strong','',new Date(story.created_at).toLocaleString('vi-VN')),
+        element('span','subtle',story.stage === 'draft' ? 'Bản nháp · mock' : story.stage));
+      node.append(head, element('p','idea',story.idea));
+      const steps = element('div','steps');
+      for (const [key,name] of names) {
+        const task = story.tasks[key];
+        const box = element('div','step');
+        box.append(element('strong','',name), element('span','status '+(task?.status === 'completed' ? 'done' : task?.status === 'technical_failure' ? 'error' : 'waiting'),
+          task ? (labels[task.status] || task.status) : 'Chưa bắt đầu'));
+        steps.append(box);
+      }
+      node.append(steps);
+      const tasks = story.tasks;
+      let button;
+      if (!tasks.mock_blueprint) button = actionButton('Tạo dàn ý', `/stories/${story.id}/mock-blueprint`);
+      else if (tasks.mock_blueprint.status === 'completed' && !tasks.mock_chapters)
+        button = actionButton('Tạo 20 chương', `/stories/${story.id}/mock-chapters`);
+      else if (tasks.mock_chapters?.status === 'completed' && !tasks.mock_package)
+        button = actionButton('Dựng gói 5 tệp', `/stories/${story.id}/mock-package`);
+      else if (tasks.mock_package?.status === 'technical_failure' && tasks.mock_package.attempt_no < tasks.mock_package.attempt_limit)
+        button = actionButton('Thử lại gói mock', `/stories/${story.id}/mock-package/${tasks.mock_package.task_id}/retry`);
+      if (button) { const wrap = element('p'); wrap.append(button); node.append(wrap); }
+      if (tasks.mock_package?.directory) {
+        const packageTask = tasks.mock_package;
+        const base = `/stories/${story.id}/mock-package/${packageTask.task_id}/files/`;
+        const files = element('div','files');
+        for (const filename of ['hook.mp4','hook.srt','story.txt','caption.txt','comment.txt']) {
+          const link = element('a','',filename === 'hook.mp4' ? 'Xem video' : `Mở ${filename}`);
+          link.href = base + filename;
+          link.target = '_blank'; link.rel = 'noopener noreferrer';
+          const download = element('a','',`Tải ${filename}`);
+          download.href = base + filename + '?download=1';
+          files.append(link, download);
+        }
+        node.append(files, element('div','path',`Gói mock trên máy: ${packageTask.directory}`));
+      }
+      return node;
+    }
+    async function refresh() {
+      try {
+        const data = await request('/operator/stories');
+        list.replaceChildren();
+        if (!data.stories.length) list.append(element('p','subtle','Chưa có story nào.'));
+        for (const story of data.stories) list.append(card(story));
+      } catch (error) { message.textContent = error.message; }
+    }
+    document.getElementById('create-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      const idea = document.getElementById('idea').value.trim();
+      if (!idea) return;
+      const button = document.getElementById('create-button'); button.disabled = true;
+      try {
+        const campaign = await request('/campaigns', {name:'Thử nghiệm ý tưởng',source_type:'user_idea',target_count:1});
+        await request(`/campaigns/${campaign.id}/stories`, {source_type:'user_idea',idea});
+        document.getElementById('idea').value = '';
+        message.textContent = 'Đã tạo bản nháp. Bấm “Tạo dàn ý” để bắt đầu.';
+        await refresh();
+      } catch (error) { message.textContent = error.message; }
+      finally { button.disabled = false; }
+    });
+    document.getElementById('refresh-button').addEventListener('click', refresh);
+    refresh(); setInterval(refresh, 5000);
+  </script>
+</body>
+</html>
