@@ -13,13 +13,14 @@ Hướng Vercel/Render đã **hủy**. Đây là web **chạy trên từng máy*
 - Quy tắc vòng đời story, 20 chương tuần tự, các gate bắt buộc và điều kiện ghi nhận `production_ready`.
 - Kiểm soát nhận việc theo mục tiêu ngày, hàng chờ duyệt, khả năng xử lý an toàn và ngân sách.
 - Quy tắc Cloud Boundary và chọn provider/fallback theo assignment đã duyệt.
+- Bản ghi policy/model-assignment bất biến cùng sổ provider/cost gắn với task attempt; chưa có provider thật nhưng nền audit và chặn gọi khi chưa duyệt đã sẵn sàng.
 - Hai profile dùng chung logic: `lite` dùng SQLite cục bộ trên máy 4 GB; `standard` dành cho PostgreSQL/RabbitMQ khi máy có đủ tài nguyên.
 - Các bảng đầu tiên cùng migration PostgreSQL, repository và API tạo campaign/story nháp, xem story, duyệt story đã sẵn sàng.
 - Task bền vững với idempotency key, lease, checkpoint và trạng thái chờ xác nhận sau gián đoạn; đã có lõi worker Lite thăm dò database, nhưng chưa nối thành tiến trình vận hành với các handler sản xuất story.
 - Đường thử offline đã nối API command handler → blueprint giả lập → 20 chương giả lập tuần tự qua các task và checkpoint bền vững. Đây là dữ liệu kiểm tra quy trình, không phải nội dung sản xuất và không thể tăng Production KPI.
 - Có lệnh chụp bản sao database Lite nhất quán, kiểm tra tính toàn vẹn và từ chối ghi đè file cũ. Đây chưa phải bản backup đầy đủ của media và cấu hình.
 - Đã nối đường thử offline qua task xuất gói: bốn file chữ giả lập và `hook.mp4` hợp lệ (15 giây, 720×1280, phụ đề gắn vào hình, âm báo giả lập), lưu đúng năm file trong `MOCK_OUTPUT`. Có kiểm tra media/checksum và thử chạy lại không ghi đè. Đây chỉ là gói kỹ thuật mock, chưa phải story/media dùng để xuất bản.
-- Test domain, database, task, cấu hình profile và API command handlers. SQLite WAL và claim tranh chấp đã được kiểm thử; PostgreSQL/RabbitMQ thật chưa được xác minh.
+- Test domain, database, task, cấu hình profile, governance ledger và API command handlers. SQLite WAL, nâng schema và claim tranh chấp đã được kiểm thử; PostgreSQL/RabbitMQ thật chưa được xác minh.
 
 ## Chạy test hiện tại
 

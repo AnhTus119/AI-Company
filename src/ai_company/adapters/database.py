@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
@@ -47,6 +48,7 @@ class Base(DeclarativeBase):
 
 
 JSON_DOCUMENT = JSON().with_variant(JSONB(), "postgresql")
+LITE_SCHEMA_VERSION = 2
 
 
 def utcnow() -> datetime:
@@ -182,6 +184,70 @@ class TaskAttemptRow(Base):
     failure_class: Mapped[str | None] = mapped_column(String(40), nullable=True)
 
 
+class PolicyVersionRow(Base):
+    __tablename__ = "policy_versions"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    version: Mapped[str] = mapped_column(String(100), unique=True)
+    status: Mapped[str] = mapped_column(String(24), default="draft")
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    payload: Mapped[dict] = mapped_column(JSON_DOCUMENT)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ModelAssignmentVersionRow(Base):
+    __tablename__ = "model_assignment_versions"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    version: Mapped[str] = mapped_column(String(100), unique=True)
+    status: Mapped[str] = mapped_column(String(24), default="draft")
+    effective_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    assignments: Mapped[dict] = mapped_column(JSON_DOCUMENT)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ProviderCallRow(Base):
+    __tablename__ = "provider_call_ledger"
+    __table_args__ = (Index("ix_provider_call_task_attempt", "task_attempt_id", "requested_at"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    task_attempt_id: Mapped[UUID] = mapped_column(ForeignKey("task_attempts.id"))
+    assignment_version_id: Mapped[UUID] = mapped_column(ForeignKey("model_assignment_versions.id"))
+    policy_version_id: Mapped[UUID] = mapped_column(ForeignKey("policy_versions.id"))
+    provider_key: Mapped[str] = mapped_column(String(100))
+    model_key: Mapped[str] = mapped_column(String(200))
+    workload: Mapped[str] = mapped_column(String(100))
+    status: Mapped[str] = mapped_column(String(32), default="started")
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    usage: Mapped[dict] = mapped_column(JSON_DOCUMENT, default=dict)
+    error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    used_fallback: Mapped[bool] = mapped_column(Boolean, default=False)
+    route_reason: Mapped[str] = mapped_column(String(100))
+
+
+class CostLedgerRow(Base):
+    __tablename__ = "cost_ledger"
+    __table_args__ = (
+        UniqueConstraint("provider_call_id"),
+        CheckConstraint("estimated_minor >= 0"),
+        CheckConstraint("actual_minor IS NULL OR actual_minor >= 0"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    provider_call_id: Mapped[UUID] = mapped_column(ForeignKey("provider_call_ledger.id"))
+    currency: Mapped[str] = mapped_column(String(3))
+    estimated_minor: Mapped[int] = mapped_column(Integer)
+    actual_minor: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rate_card_version: Mapped[str] = mapped_column(String(100))
+    budget_decision_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 def make_session_factory(database_url: str) -> sessionmaker[Session]:
     engine = create_engine(database_url, pool_pre_ping=True)
     if engine.dialect.name == "sqlite":
@@ -200,7 +266,7 @@ def make_session_factory(database_url: str) -> sessionmaker[Session]:
 
 
 def initialize_lite_schema(sessions: sessionmaker[Session]) -> None:
-    """Initialize schema v1 on a new local database; reject unknown versions."""
+    """Initialize or upgrade the local schema; reject unknown future versions."""
     engine = sessions.kw["bind"]
     if engine.dialect.name != "sqlite":
         raise DomainError("Lite schema initialization requires SQLite.")
@@ -209,8 +275,18 @@ def initialize_lite_schema(sessions: sessionmaker[Session]) -> None:
     if version == 0:
         Base.metadata.create_all(engine)
         with engine.begin() as connection:
-            connection.exec_driver_sql("PRAGMA user_version=1")
-    elif version != 1:
+            connection.exec_driver_sql(f"PRAGMA user_version={LITE_SCHEMA_VERSION}")
+    elif version == 1:
+        for table in (
+            PolicyVersionRow.__table__,
+            ModelAssignmentVersionRow.__table__,
+            ProviderCallRow.__table__,
+            CostLedgerRow.__table__,
+        ):
+            table.create(engine, checkfirst=True)
+        with engine.begin() as connection:
+            connection.exec_driver_sql(f"PRAGMA user_version={LITE_SCHEMA_VERSION}")
+    elif version != LITE_SCHEMA_VERSION:
         raise DomainError(f"Unsupported lite database schema version: {version}.")
 
 
@@ -641,4 +717,175 @@ class TaskRepository:
                 entity_type="task", entity_id=task_id,
                 action="recovery_confirmed", outcome=task.status,
             ))
+
+
+def _require_aware(at: datetime) -> datetime:
+    if at.tzinfo is None:
+        raise DomainError("A timezone-aware timestamp is required.")
+    return at.astimezone(timezone.utc)
+
+
+def _assert_safe_ledger_document(value: object) -> None:
+    """Reject obvious credential-shaped fields before durable ledger storage."""
+    forbidden = {"secret", "password", "api_key", "apikey", "authorization", "credential", "token"}
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            normalized = str(key).lower().replace("-", "_")
+            if normalized in forbidden or any(part in forbidden for part in normalized.split("_")):
+                raise DomainError("Governance and provider ledgers cannot store credentials or tokens.")
+            _assert_safe_ledger_document(nested)
+    elif isinstance(value, (list, tuple)):
+        for nested in value:
+            _assert_safe_ledger_document(nested)
+
+
+class GovernanceRepository:
+    """Immutable approvals and append-oriented provider/cost accounting."""
+
+    def __init__(self, sessions: sessionmaker[Session]):
+        self.sessions = sessions
+
+    def create_policy_version(self, version: str, payload: dict) -> UUID:
+        return self._create_version(PolicyVersionRow, version, "payload", payload)
+
+    def create_assignment_version(self, version: str, assignments: dict) -> UUID:
+        return self._create_version(ModelAssignmentVersionRow, version, "assignments", assignments)
+
+    def _create_version(self, row_type, version: str, document_field: str, document: dict) -> UUID:
+        if not version.strip() or not isinstance(document, dict) or not document:
+            raise DomainError("A version name and non-empty document are required.")
+        _assert_safe_ledger_document(document)
+        try:
+            with self.sessions.begin() as session:
+                row = row_type(version=version.strip(), **{document_field: document})
+                session.add(row)
+                session.flush()
+                return row.id
+        except IntegrityError as exc:
+            raise DomainError(f"Version already exists: {version.strip()}.") from exc
+
+    def approve_policy_version(self, version: str, approved_by: str, at: datetime) -> UUID:
+        return self._approve_version(PolicyVersionRow, version, approved_by, at, activate=False)
+
+    def activate_assignment_version(self, version: str, approved_by: str, at: datetime) -> UUID:
+        return self._approve_version(ModelAssignmentVersionRow, version, approved_by, at, activate=True)
+
+    def _approve_version(self, row_type, version: str, approved_by: str, at: datetime, *, activate: bool) -> UUID:
+        approved_at = _require_aware(at)
+        if not approved_by.strip():
+            raise DomainError("Approval requires an actor.")
+        with self.sessions.begin() as session:
+            row = session.scalar(select(row_type).where(row_type.version == version).with_for_update())
+            if row is None:
+                raise DomainError("The requested version does not exist.")
+            if row.status != "draft":
+                raise DomainError("An approved version is immutable and cannot be approved again.")
+            row.status = "active" if activate else "approved"
+            row.approved_at = approved_at
+            row.approved_by = approved_by.strip()
+            if activate:
+                row.effective_at = approved_at
+            session.add(AuditEventRow(
+                entity_type="model_assignment_version" if activate else "policy_version",
+                entity_id=row.id,
+                action="activated" if activate else "approved",
+                outcome="ok",
+                details={"version": row.version},
+            ))
+            return row.id
+
+    def start_provider_call(
+        self,
+        *,
+        task_attempt_id: UUID,
+        policy_version: str,
+        assignment_version: str,
+        provider_key: str,
+        model_key: str,
+        workload: str,
+        requested_at: datetime,
+        estimated_minor: int,
+        currency: str,
+        rate_card_version: str,
+        used_fallback: bool = False,
+        route_reason: str = "primary",
+        budget_decision_id: UUID | None = None,
+    ) -> UUID:
+        requested = _require_aware(requested_at)
+        required_text = (provider_key, model_key, workload, rate_card_version, route_reason)
+        if any(not value.strip() for value in required_text):
+            raise DomainError("Provider ledger fields cannot be blank.")
+        if estimated_minor < 0 or not re.fullmatch(r"[A-Z]{3}", currency):
+            raise DomainError("Cost must be non-negative and currency must be a three-letter uppercase code.")
+        with self.sessions.begin() as session:
+            attempt = session.get(TaskAttemptRow, task_attempt_id)
+            policy = session.scalar(select(PolicyVersionRow).where(PolicyVersionRow.version == policy_version))
+            assignment = session.scalar(
+                select(ModelAssignmentVersionRow).where(ModelAssignmentVersionRow.version == assignment_version)
+            )
+            if attempt is None:
+                raise DomainError("Provider calls must belong to a persisted task attempt.")
+            if policy is None or policy.status != "approved":
+                raise DomainError("Provider calls require an approved policy snapshot.")
+            if assignment is None or assignment.status != "active":
+                raise DomainError("Provider calls require an active model-assignment snapshot.")
+            call = ProviderCallRow(
+                task_attempt_id=task_attempt_id,
+                assignment_version_id=assignment.id,
+                policy_version_id=policy.id,
+                provider_key=provider_key.strip(),
+                model_key=model_key.strip(),
+                workload=workload.strip(),
+                requested_at=requested,
+                used_fallback=used_fallback,
+                route_reason=route_reason.strip(),
+            )
+            session.add(call)
+            session.flush()
+            session.add(CostLedgerRow(
+                provider_call_id=call.id,
+                currency=currency,
+                estimated_minor=estimated_minor,
+                rate_card_version=rate_card_version.strip(),
+                budget_decision_id=budget_decision_id,
+            ))
+            return call.id
+
+    def finish_provider_call(
+        self,
+        call_id: UUID,
+        *,
+        completed_at: datetime,
+        usage: dict,
+        actual_minor: int | None,
+        error_code: str | None = None,
+    ) -> None:
+        completed = _require_aware(completed_at)
+        if not isinstance(usage, dict):
+            raise DomainError("Provider usage must be a structured document.")
+        _assert_safe_ledger_document(usage)
+        if actual_minor is not None and actual_minor < 0:
+            raise DomainError("Actual cost cannot be negative.")
+        if error_code is not None and not re.fullmatch(r"[a-z0-9_.-]{1,100}", error_code):
+            raise DomainError("Provider failures must use a redacted machine-readable error code.")
+        with self.sessions.begin() as session:
+            call = session.scalar(select(ProviderCallRow).where(ProviderCallRow.id == call_id).with_for_update())
+            if call is None:
+                raise DomainError("Provider call does not exist.")
+            if call.status != "started":
+                raise DomainError("Provider call completion is recorded only once.")
+            requested = call.requested_at
+            if requested.tzinfo is None:
+                requested = requested.replace(tzinfo=timezone.utc)
+            if completed < requested:
+                raise DomainError("Provider completion cannot precede its request.")
+            call.status = "failed" if error_code else "completed"
+            call.completed_at = completed
+            call.latency_ms = int((completed - requested).total_seconds() * 1000)
+            call.usage = usage
+            call.error_code = error_code
+            cost = session.scalar(select(CostLedgerRow).where(CostLedgerRow.provider_call_id == call_id))
+            if cost is None:
+                raise DomainError("Provider call cost reservation is missing.")
+            cost.actual_minor = actual_minor
 

@@ -7,6 +7,8 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 
+from ai_company.adapters.database import LITE_SCHEMA_VERSION
+
 
 def backup_lite_database(source: Path, destination: Path) -> Path:
     # Windows may deny realpath resolution while SQLite has an open WAL handle.
@@ -26,7 +28,7 @@ def backup_lite_database(source: Path, destination: Path) -> Path:
         with closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True)) as live:
             with closing(sqlite3.connect(destination)) as snapshot:
                 live.backup(snapshot)
-                if snapshot.execute("PRAGMA user_version").fetchone()[0] != 1:
+                if snapshot.execute("PRAGMA user_version").fetchone()[0] != LITE_SCHEMA_VERSION:
                     raise ValueError("The backup has an unsupported Lite schema version.")
                 if snapshot.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                     raise ValueError("The backup failed SQLite integrity validation.")

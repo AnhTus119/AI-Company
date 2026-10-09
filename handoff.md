@@ -18,6 +18,7 @@ Cập nhật 2026-10-09. Đây là trạng thái **mã và quyết định hiệ
 
 - `Start-AI-Company.cmd` gọi `launch_local.py`: cùng Python cho API và worker, cài dependency thiếu, chỉ bind `127.0.0.1`, mở browser, dừng child process khi thoát. FastAPI phục vụ HTML tại `/`; **không còn `/login` hoặc route auth**. Startup chặn môi trường Render/Vercel. HTML cho phép tạo bản nháp `user_idea`, xếp hàng mock blueprint → mock 20 chương → mock package, xem trạng thái và mở/tải 5 file. Worker chạy riêng cùng launcher; đóng tab browser không dừng worker.
 - Dữ liệu Lite mặc định dưới `%LOCALAPPDATA%\AIContentCompany` (SQLite WAL + artifacts); không nằm trong ZIP/repo. Code có task bền vững, idempotency, lease/checkpoint, recovery hold, retry gói mock, checksum file, snapshot database Lite thủ công. Backup hiện chỉ gồm database, chưa đầy đủ artifacts/cấu hình.
+- Lite schema v2 bổ sung policy/model-assignment snapshot và provider/cost ledger. Provider call phải gắn với task attempt, policy đã duyệt và assignment đã kích hoạt; completion chỉ ghi một lần, không lưu lỗi thô/credential. Migration PostgreSQL tương ứng là `0002_governance_ledgers`.
 - MP4 mock là tệp kỹ thuật hợp lệ 15 giây 720×1280 với caption/âm giả lập; text/chapter/blueprint cũng giả lập. Không có real AI/content/media provider hoạt động, không có automatic publishing, không có dashboard duyệt/khôi phục đầy đủ. Standard PostgreSQL/RabbitMQ là hướng thiết kế, chưa xác minh end-to-end hoặc chuyển dữ liệu.
 - Trước lần đổi hướng này, bài HTTP API+worker process riêng từng đạt trên laptop 4 GB với đủ RAM. Sau khi gỡ auth/public, lượt chạy lại ngày 2026-10-09 bị skip vì RAM khả dụng dưới ngưỡng 768 MB trong tiến trình test; cần chạy lại khi đủ RAM và xác nhận nhấp đúp thật trên máy chủ dự án. **Không suy ra web đang chạy từ unit tests**.
 
@@ -29,5 +30,5 @@ Cập nhật 2026-10-09. Đây là trạng thái **mã và quyết định hiệ
 
 ## Kiểm chứng và an toàn
 
-- Sau khi bỏ auth: `python -m pytest -q --basetemp=.pytest-run` đạt **39 passed, 1 skipped** ngày 2026-10-09. `python launch_local.py --check` đạt. Test HTTP process riêng là opt-in (`AI_COMPANY_RUN_HTTP_INTEGRATION=1`); lần chạy lại bị skip vì RAM khả dụng dưới ngưỡng 768 MB, không phải pass. Khởi động qua launcher trên máy thật vẫn là kiểm chứng bắt buộc.
+- Sau governance-ledger increment: `python -m pytest -q --basetemp=.pytest-run` đạt **43 passed, 1 skipped** ngày 2026-10-09. `python launch_local.py --check` đạt. Test HTTP process riêng là opt-in (`AI_COMPANY_RUN_HTTP_INTEGRATION=1`); lần chạy lại bị skip vì RAM khả dụng dưới ngưỡng 768 MB, không phải pass. Khởi động qua launcher trên máy thật vẫn là kiểm chứng bắt buộc.
 - Vì không có login, bất kỳ tiến trình/người nào trên cùng máy có thể gọi localhost API. Không dùng dữ liệu nhạy cảm, không mở port 8000 ra ngoài. Việc bỏ auth chỉ phù hợp hướng local theo yêu cầu hiện tại; không tái dùng bản này để public nếu chưa thiết kế bảo mật mới.
