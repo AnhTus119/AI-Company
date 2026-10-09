@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Đăng nhập · AI Company</title>
+  <style>
+    body { margin:0; min-height:100vh; display:grid; place-items:center; background:#f3f6f9; color:#172638; font-family:system-ui,-apple-system,"Segoe UI",sans-serif; }
+    main { width:min(400px,calc(100% - 32px)); background:white; border:1px solid #dce4ec; border-radius:14px; padding:28px; box-shadow:0 8px 30px #17263818; }
+    h1 { margin:0 0 8px; font-size:1.55rem; }
+    p { color:#5a6c7d; line-height:1.45; }
+    label { display:block; font-weight:600; margin:18px 0 6px; }
+    input { width:100%; box-sizing:border-box; padding:11px; border:1px solid #aab8c6; border-radius:8px; font:inherit; }
+    button { width:100%; margin-top:22px; padding:11px; background:#1766b0; color:white; border:0; border-radius:8px; font:inherit; font-weight:700; cursor:pointer; }
+    #error { color:#a63131; min-height:1.3em; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>AI Company</h1>
+    <p>Chỉ dành cho hai người dùng đã được cấu hình trên máy này.</p>
+    <form id="login-form">
+      <label for="username">Tên đăng nhập</label>
+      <input id="username" autocomplete="username" required>
+      <label for="password">Mật khẩu</label>
+      <input id="password" type="password" autocomplete="current-password" required>
+      <button type="submit">Đăng nhập</button>
+    </form>
+    <p id="error" role="alert"></p>
+  </main>
+  <script>
+    document.getElementById('login-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      const error = document.getElementById('error'); error.textContent = '';
+      const username = document.getElementById('username').value;
+      const password = document.getElementById('password').value;
+      try {
+        const response = await fetch('/auth/login', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({username,password})});
+        if (!response.ok) throw new Error('Không đăng nhập được. Kiểm tra tên và mật khẩu.');
+        location.replace('/');
+      } catch (problem) { error.textContent = problem.message; }
+    });
+  </script>
+</body>
+</html>

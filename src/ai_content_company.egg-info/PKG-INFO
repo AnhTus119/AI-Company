@@ -1,0 +1,19 @@
+Metadata-Version: 2.4
+Name: ai-content-company
+Version: 0.1.0
+Summary: Local-first AI content production control plane
+Requires-Python: >=3.12
+Requires-Dist: fastapi<1,>=0.115
+Requires-Dist: uvicorn<1,>=0.30
+Requires-Dist: pydantic<3,>=2
+Requires-Dist: SQLAlchemy<3,>=2
+Provides-Extra: dev
+Requires-Dist: pytest<10,>=8; extra == "dev"
+Requires-Dist: httpx<1,>=0.27; extra == "dev"
+Provides-Extra: media
+Requires-Dist: imageio-ffmpeg<1,>=0.6; extra == "media"
+Requires-Dist: Pillow<13,>=11; extra == "media"
+Provides-Extra: standard
+Requires-Dist: alembic<2,>=1.13; extra == "standard"
+Requires-Dist: psycopg[binary]<4,>=3.2; extra == "standard"
+Requires-Dist: dramatiq[rabbitmq]<3,>=1.17; extra == "standard"
