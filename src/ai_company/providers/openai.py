@@ -107,10 +107,16 @@ class OpenAIResponsesStructuredProvider:
     def generate_structured(self, request: StructuredRequest) -> StructuredResult:
         if not request.prompt.strip() or request.max_output_tokens <= 0:
             raise ValueError("Structured generation needs a prompt and positive output limit.")
+        if request.reasoning_effort not in {"none", "low", "medium", "high", "xhigh", "max"}:
+            raise ValueError("Unsupported OpenAI reasoning effort.")
+        if request.service_tier not in {"auto", "default", "fast", "flex", "priority"}:
+            raise ValueError("Unsupported OpenAI service tier.")
         payload = {
             "model": self.model_key,
             "input": [{"role": "user", "content": request.prompt}],
             "max_output_tokens": request.max_output_tokens,
+            "reasoning": {"effort": request.reasoning_effort},
+            "service_tier": request.service_tier,
             "text": {"format": {
                 "type": "json_schema", "name": "story_blueprint", "strict": True,
                 "schema": request.json_schema,

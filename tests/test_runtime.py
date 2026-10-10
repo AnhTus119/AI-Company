@@ -16,7 +16,7 @@ def test_lite_profile_uses_local_wal_and_reopens(tmp_path: Path) -> None:
     settings = load_runtime_settings({"LOCALAPPDATA": str(tmp_path)})
     assert settings.profile == RuntimeProfile.LITE
     assert settings.transport == "database_polling"
-    assert settings.max_local_workers == 1
+    assert settings.max_local_workers == 2
     assert settings.data_dir == tmp_path / "AIContentCompany"
     settings.data_dir.mkdir()
     sessions = make_session_factory(settings.database_url)

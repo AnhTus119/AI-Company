@@ -131,6 +131,8 @@ class BudgetedStructuredAgentRunner:
                     prompt=prompt,
                     json_schema=json_schema,
                     max_output_tokens=binding.max_output_tokens,
+                    reasoning_effort=self.settings.reasoning_effort_for(workload),
+                    service_tier=binding.service_tier,
                 ))
                 value = output_model.model_validate(result.value)
                 actual = binding.rate_card.actual(result.usage)

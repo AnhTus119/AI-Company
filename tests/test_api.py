@@ -22,6 +22,10 @@ def test_local_api_command_handlers(tmp_path) -> None:
     app = create_app(repository)
 
     assert endpoint(app, "/health", "GET")() == {"status": "ok"}
+    capabilities = endpoint(app, "/operator/capabilities", "GET")()
+    assert capabilities["text"]["model"] == "gpt-5.6-terra"
+    assert capabilities["approval_modes"] == ["manual", "auto"]
+    assert capabilities["video"]["real_provider_integrated"] is False
     campaign = endpoint(app, "/campaigns", "POST")(
         CampaignCreate(name="Prototype", source_type=SourceType.USER_IDEA, target_count=1)
     )

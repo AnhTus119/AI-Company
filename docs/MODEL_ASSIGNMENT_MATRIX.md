@@ -1,7 +1,7 @@
 # Model Assignment Matrix
 
-**Status:** User-editable selection template  
-**Rule:** `[USER TO SELECT]` is intentionally blank. Completing this matrix requires user approval; it must not be filled by the AI CEO or hard-coded into business logic.
+**Status:** GPT-5.6-Terra text slice approved by user on 2026-10-10
+**Rule:** current implemented text workloads use OpenAI `gpt-5.6-terra` only, with no fallback. Video/TTS/audio remain unselected.
 
 ## How to use this matrix
 
@@ -33,10 +33,10 @@
 | Autonomous Concept Generation | Create diverse concepts from policy/history | [USER TO SELECT] | [USER TO SELECT] | Creative ideation, diversity constraints | Vision: no; Reasoning: medium; Context: medium; Structured: required | Q/C balanced | Weak concept QC | No mandatory concept approval by default | UNSELECTED |
 | User Idea Expansion | Refine a user seed into a concept | [USER TO SELECT] | [USER TO SELECT] | Instruction following, creativity | Vision: no; Reasoning: medium; Context: medium; Structured: required | Q/C balanced | Concept fails QC | Preserve explicit user constraints | UNSELECTED |
 | Reference + User Idea Synthesis | Blend idea with abstract DNA | [USER TO SELECT] | [USER TO SELECT] | Constraint synthesis, originality | Vision: optional; Reasoning: high; Context: long; Structured: required | Q> C | Boundary-risk finding | No near-copy | UNSELECTED |
-| Story Bible | Create canonical story facts/arcs | [USER TO SELECT] | [USER TO SELECT] | Planning, consistency, JSON schema | Vision: no; Reasoning: high; Context: long; Structured: required | Q> C | Bible QC failure | Human approval policy applies | UNSELECTED |
-| 20-Chapter Planning | Build objectives, reveals, pacing | [USER TO SELECT] | [USER TO SELECT] | Long-form planning, retention design | Vision: no; Reasoning: high; Context: long; Structured: required | Q> C | Core arc/retention failure | Exactly 20 chapters | UNSELECTED |
-| Hook–Story Contract | Define Chapter 0 continuity | [USER TO SELECT] | [USER TO SELECT] | Continuity, open-loop mapping | Vision: no; Reasoning: high; Context: medium; Structured: required | Q> C | Continuity gate failure | Required before production-ready | UNSELECTED |
-| Chapter Generation | Produce one approved-plan chapter | [USER TO SELECT] | [USER TO SELECT] | English prose, instruction following | Vision: no; Reasoning: medium; Context: medium-long; Structured: optional | Q/C balanced | Chapter critical failure | 500–700 words target | UNSELECTED |
+| Story Bible | Create canonical story facts/arcs | OpenAI / `gpt-5.6-terra` | NONE | Planning, consistency, JSON schema | Vision: no; Reasoning: low; Context: long; Structured: required | Q/C/S balanced | Fail closed | Bundled with plan + hook contract | USER_APPROVED |
+| 20-Chapter Planning | Build objectives, reveals, pacing | OpenAI / `gpt-5.6-terra` | NONE | Long-form planning, retention design | Vision: no; Reasoning: low; Context: long; Structured: required | Q/C/S balanced | Fail closed | Exactly 20 chapters | USER_APPROVED |
+| Hook–Story Contract | Define Chapter 0 continuity | OpenAI / `gpt-5.6-terra` | NONE | Continuity, open-loop mapping | Vision: no; Reasoning: low; Context: medium; Structured: required | Q/C/S balanced | Fail closed | Required before production-ready | USER_APPROVED |
+| Chapter Generation | Produce one approved-plan chapter | OpenAI / `gpt-5.6-terra` | NONE | English prose, instruction following | Vision: no; Reasoning: none/low; Context: medium-long; Structured: required | S/C/Q balanced | Fail closed | Fast mode combines edit + QC | USER_APPROVED |
 | Chapter Recap | Create spoiler-safe prior-state recap | [USER TO SELECT] | [USER TO SELECT] | Concise faithful summarization | Vision: no; Reasoning: low-medium; Context: short; Structured: optional | C/S> Q | Continuity mismatch | Chapters 2–20 only | UNSELECTED |
 | Continuity Repair | Correct accepted-state conflict | [USER TO SELECT] | [USER TO SELECT] | Fact tracking, targeted rewrite | Vision: no; Reasoning: high; Context: long; Structured: required | Q> C | Repeated contradiction | Preserve intended arc | UNSELECTED |
 | Hook Concept | Select first-3-second pattern and beats | [USER TO SELECT] | [USER TO SELECT] | Retention design, originality | Vision: optional; Reasoning: high; Context: medium; Structured: required | Q> C | Hook QC failure | No fixed shock formula | UNSELECTED |
@@ -44,7 +44,7 @@
 | Hook Visual Prompt | Produce provider-neutral visual plan/prompt | [USER TO SELECT] | [USER TO SELECT] | Visual specification, continuity | Vision: optional; Reasoning: medium; Context: medium; Structured: required | Q> C | Visual continuity failure | Provider adapter transforms it | UNSELECTED |
 | Hook Transcript | Align approved dialogue to text | [USER TO SELECT] | [USER TO SELECT] | Transcript/timing fidelity | Vision: no; Reasoning: low; Context: short; Structured: required | C/S> Q | Mismatch with audio | Produces subtitle timing input | UNSELECTED |
 | Story Bible QC | Evaluate Story Bible | [USER TO SELECT] | [USER TO SELECT] | Critical reasoning, rubric scoring | Vision: no; Reasoning: high; Context: long; Structured: required | Q> C | Low confidence or critical issue | Separate critic role | UNSELECTED |
-| Chapter QC | Diagnose chapter issues | [USER TO SELECT] | [USER TO SELECT] | Continuity, prose, issue severity | Vision: no; Reasoning: medium-high; Context: medium; Structured: required | Q/C balanced | Critical issue | Minor issues are warnings | UNSELECTED |
+| Chapter QC | Diagnose chapter issues | OpenAI / `gpt-5.6-terra` | NONE | Continuity, prose, issue severity | Vision: no; Reasoning: low; Context: medium; Structured: required | Q/C/S balanced | Stop auto-chain on fail | Combined in fast; independent in quality mode | USER_APPROVED |
 | Retention Evaluation | Score curiosity/tension/engagement | [USER TO SELECT] | [USER TO SELECT] | Reader-retention rubric | Vision: no; Reasoning: medium; Context: medium; Structured: required | Q/C balanced | Core arc impact | Diagnostic by default | UNSELECTED |
 | Final Story QC | Evaluate complete story package | [USER TO SELECT] | [USER TO SELECT] | Long-context criticism, rubric | Vision: no; Reasoning: high; Context: long; Structured: required | Q> C | Critical failure/contradiction | Before production_ready | UNSELECTED |
 | Originality / Reference Boundary Analysis | Prevent near-copy | [USER TO SELECT] | [USER TO SELECT] | Comparative reasoning, evidence | Vision: optional; Reasoning: high; Context: long; Structured: required | Q> C | High similarity/risk | Critical gate | UNSELECTED |

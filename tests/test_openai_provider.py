@@ -28,6 +28,8 @@ def test_openai_responses_adapter_uses_strict_schema_and_bearer_header() -> None
     assert captured["url"] == "https://api.openai.com/v1/responses"
     assert captured["headers"]["Authorization"] == "Bearer private-openai-key"
     assert captured["body"]["text"]["format"]["strict"] is True
+    assert captured["body"]["reasoning"] == {"effort": "low"}
+    assert captured["body"]["service_tier"] == "default"
     assert "private-openai-key" not in json.dumps(captured["body"])
 
 
@@ -50,11 +52,11 @@ def test_openai_access_check_uses_model_endpoint_without_story_payload() -> None
 
     def get(url, headers, timeout):
         captured.update(url=url, headers=headers, timeout=timeout)
-        return 200, {"id": "gpt-6.1-sol"}
+        return 200, {"id": "gpt-5.6-terra"}
 
     provider = OpenAIResponsesStructuredProvider(
-        "private-openai-key", "gpt-6.1-sol", http_get=get,
+        "private-openai-key", "gpt-5.6-terra", http_get=get,
     )
     provider.check_access()
-    assert captured["url"].endswith("/models/gpt-6.1-sol")
+    assert captured["url"].endswith("/models/gpt-5.6-terra")
     assert set(captured) == {"url", "headers", "timeout"}

@@ -17,6 +17,7 @@
     h2 { margin:0 0 14px; font-size:1.2rem; }
     label { display:block; font-weight:600; margin-bottom:8px; }
     textarea { width:100%; min-height:92px; resize:vertical; border:1px solid #aab7c5; border-radius:8px; padding:11px; font:inherit; }
+    select { border:1px solid #aab7c5; border-radius:8px; padding:9px 11px; font:inherit; background:white; }
     button { border:0; border-radius:8px; background:#1766b0; color:white; font:inherit; font-weight:600; padding:10px 15px; cursor:pointer; }
     button:hover { background:#0e518f; }
     button:disabled { opacity:.55; cursor:wait; }
@@ -48,6 +49,11 @@
       <form id="create-form">
         <label for="idea">Ý tưởng truyện (dùng dữ liệu không nhạy cảm)</label>
         <textarea id="idea" required maxlength="5000" placeholder="Ví dụ: Một bí mật gia đình được hé lộ sau cuộc gặp bất ngờ..."></textarea>
+        <label for="approval-mode">Duyệt cuối</label>
+        <select id="approval-mode">
+          <option value="manual">Thủ công (mặc định an toàn)</option>
+          <option value="auto">Tự động khi toàn bộ gate đã pass</option>
+        </select>
         <p><button id="create-button" type="submit">Tạo bản nháp</button></p>
       </form>
     </section>
@@ -91,7 +97,7 @@
       const node = element('article','card');
       const head = element('div','row');
       head.append(element('strong','',new Date(story.created_at).toLocaleString('vi-VN')),
-        element('span','subtle',story.stage === 'draft' ? 'Bản nháp · mock' : story.stage));
+        element('span','subtle',`${story.stage === 'draft' ? 'Bản nháp' : story.stage} · duyệt ${story.approval_mode === 'auto' ? 'tự động' : 'thủ công'}`));
       node.append(head, element('p','idea',story.idea));
       const steps = element('div','steps');
       for (const [key,name] of names) {
@@ -168,10 +174,11 @@
     document.getElementById('create-form').addEventListener('submit', async event => {
       event.preventDefault();
       const idea = document.getElementById('idea').value.trim();
+      const approvalMode = document.getElementById('approval-mode').value;
       if (!idea) return;
       const button = document.getElementById('create-button'); button.disabled = true;
       try {
-        const campaign = await request('/campaigns', {name:'Thử nghiệm ý tưởng',source_type:'user_idea',target_count:1});
+        const campaign = await request('/campaigns', {name:'Thử nghiệm ý tưởng',source_type:'user_idea',target_count:1,approval_mode:approvalMode});
         await request(`/campaigns/${campaign.id}/stories`, {source_type:'user_idea',idea});
         document.getElementById('idea').value = '';
         message.textContent = 'Đã tạo bản nháp. Bấm “Tạo dàn ý” để bắt đầu.';

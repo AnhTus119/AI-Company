@@ -249,6 +249,8 @@ class RealBlueprintHandler:
                 result = binding.provider.generate_structured(StructuredRequest(
                     prompt=prompt, json_schema=REAL_BLUEPRINT_SCHEMA,
                     max_output_tokens=binding.max_output_tokens,
+                    reasoning_effort=self.settings.reasoning_effort_for(WORKLOAD),
+                    service_tier=binding.service_tier,
                 ))
                 blueprint = RealBlueprint.model_validate(result.value)
                 actual = binding.rate_card.actual(result.usage)

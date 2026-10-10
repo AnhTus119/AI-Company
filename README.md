@@ -1,6 +1,6 @@
 # AI Content Company
 
-Hệ thống sản xuất nội dung drama tiếng Anh trên máy Windows, hiện ở **Phase 6 — MVP implementation**. Đây mới là lát cắt nền tảng; chưa thể tạo một story hoàn chỉnh hoặc chạy chiến dịch tự động.
+Hệ thống sản xuất nội dung drama tiếng Anh trên máy Windows, hiện ở **Phase 6 — MVP implementation**. Lát cắt thật hiện tạo được Story Bible và 20 chương; hook video/media thật và đóng gói production vẫn là phần còn thiếu.
 
 ## Mở bản thử trên Windows
 
@@ -12,9 +12,10 @@ Hướng Vercel/Render đã **hủy**. Đây là web **chạy trên từng máy*
 
 - Quy tắc vòng đời story, 20 chương tuần tự, các gate bắt buộc và điều kiện ghi nhận `production_ready`.
 - Kiểm soát nhận việc theo mục tiêu ngày, hàng chờ duyệt, khả năng xử lý an toàn và ngân sách.
-- Quy tắc Cloud Boundary và chọn provider/fallback theo assignment đã duyệt.
+- Quy tắc Cloud Boundary và assignment model đã duyệt. Runtime hiện khóa duy nhất OpenAI `gpt-5.6-terra`; cấu hình model/provider khác bị từ chối.
 - Bản ghi policy/model-assignment bất biến cùng sổ provider/cost gắn với task attempt; mọi provider thật bị chặn cho đến khi route và ngân sách được duyệt.
-- Các vai `story_architect`, `chapter_writer`, `editor` và `continuity_qc` hỗ trợ OpenAI Responses API hoặc Gemini làm primary/fallback. Mỗi lần gọi giữ ngân sách riêng, ghi provider/model/fallback và chỉ fallback cho lỗi có thể thử lại. Pipeline chương chạy tuần tự writer → editor → QC; chỉ chương vượt QC mới được lưu vào Novel Workspace. Dashboard có thể chạy từng chương hoặc tự nối task đến đủ 20 chương, và tự dừng an toàn khi QC/budget/provider chặn.
+- Các vai `story_architect`, `chapter_writer`, `editor` và `continuity_qc` dùng OpenAI Responses API. Mỗi lần gọi giữ ngân sách riêng và ghi provider/model. Chế độ `fast` gộp writer → editor → QC vào một structured response (20 call/truyện thay vì 60); chế độ `quality` giữ ba call độc lập. Chỉ chương vượt QC mới được lưu. Hai worker Lite mặc định có thể xử lý hai story song song, trong giới hạn RAM/budget.
+- Campaign có `approval_mode=manual|auto`. `manual` là mặc định; `auto` chỉ tự duyệt sau khi story đã vượt toàn bộ production gate và artifact thật đã được xác minh.
 - Novel Workspace native lưu Story Bible, nhân vật, 20 outline, chapter drafts, continuity/open loops và foreshadow ngay trong SQLite local; không có đăng nhập/đăng ký và dùng optimistic version để chống ghi đè. Xem [Novel Workspace](docs/NATIVE_NOVEL_WORKSPACE.md).
 - Cầu nối MuMuAINovel được giữ như integration tùy chọn để export/push project v1.1.0. Core không phụ thuộc vào MuMu; code GPLv3 của upstream không được sao chép vào repo này. Xem [hướng dẫn agent và MuMuAINovel](docs/AI_AGENTS_AND_MUMU_SETUP.md).
 - Hai profile dùng chung logic: `lite` dùng SQLite cục bộ trên máy 4 GB; `standard` dành cho PostgreSQL/RabbitMQ khi máy có đủ tài nguyên.
@@ -43,7 +44,7 @@ Profile `standard` sẽ dùng PostgreSQL/RabbitMQ khi các adapter và kiểm th
 
 API hiện chỉ nhận story nháp kiểu `user_idea`. Launcher tự chạy worker thử nghiệm; người phát triển có thể chạy riêng bằng `python -m ai_company.worker.mock_cli --loop`. Nó tự hoãn nếu RAM trống quá thấp. Gọi các route lần lượt: `POST /stories/{id}/mock-blueprint`, sau khi xong gọi `POST /stories/{id}/mock-chapters`, rồi `POST /stories/{id}/mock-package`; mỗi bước dùng `GET` tương ứng để xem trạng thái task. Bước xuất video đòi ít nhất 768 MB RAM khả dụng và mặc định lưu dưới thư mục dữ liệu ứng dụng (`artifacts/MOCK_OUTPUT`); có thể đổi gốc lưu bằng `ARTIFACT_ROOT`. Các chế độ reference, autonomous, dashboard đầy đủ và media thật vẫn đang được triển khai. Chưa có route nào cho phép bỏ qua gate để đánh dấu `production_ready`.
 
-Giao diện vận hành Lite ở `http://127.0.0.1:8000/` khi launcher đang chạy. Tại đây có thể tạo bản nháp từ ý tưởng, tạo dàn ý AI thật, materialize Novel Workspace và chạy từng chương qua writer → editor → continuity QC. Nhánh mock vẫn hỗ trợ dàn ý → 20 chương → gói 5 tệp để kiểm tra kỹ thuật. Launcher đã chạy worker riêng; đóng trình duyệt không dừng worker. Giao diện hiện chỉ dành cho thử nghiệm cục bộ, chưa có bảng duyệt hoặc điều khiển khôi phục đầy đủ.
+Giao diện vận hành Lite ở `http://127.0.0.1:8000/` khi launcher đang chạy. Tại đây có thể chọn duyệt thủ công/tự động, tạo bản nháp từ ý tưởng, tạo dàn ý AI thật, materialize Novel Workspace và chạy từng chương hoặc tự chạy đến chương 20. Nhánh mock vẫn hỗ trợ dàn ý → 20 chương → gói 5 tệp để kiểm tra kỹ thuật. Launcher chạy worker riêng; đóng trình duyệt không dừng worker.
 
 Nếu task xuất gói mock báo `technical_failure`, người vận hành có thể gọi `POST /stories/{id}/mock-package/{task_id}/retry` rồi chạy worker lại. Lệnh này chỉ hoạt động khi còn lượt thử trong giới hạn đã lưu (hiện tối đa hai lượt cho gói mock); nó không tự thử lại, không ghi đè gói đã xuất và không áp dụng cho task/model thật.
 

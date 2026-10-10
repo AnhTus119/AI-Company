@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from threading import RLock
 from datetime import date, datetime, timedelta, timezone
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -32,6 +33,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, rela
 
 from ai_company.domain.policy import CampaignStatus
 from ai_company.domain.workflow import (
+    ApprovalMode,
     ArtifactEvidence,
     Chapter,
     DomainError,
@@ -50,7 +52,7 @@ class Base(DeclarativeBase):
 
 
 JSON_DOCUMENT = JSON().with_variant(JSONB(), "postgresql")
-LITE_SCHEMA_VERSION = 5
+LITE_SCHEMA_VERSION = 6
 
 
 def utcnow() -> datetime:
@@ -66,6 +68,7 @@ class CampaignRow(Base):
     source_type: Mapped[str] = mapped_column(String(32))
     status: Mapped[str] = mapped_column(String(48), default=CampaignStatus.DRAFT.value)
     target_count: Mapped[int] = mapped_column(Integer, default=60)
+    approval_mode: Mapped[str] = mapped_column(String(16), default=ApprovalMode.MANUAL.value)
     kpi_timezone: Mapped[str] = mapped_column(String(64), default="Asia/Ho_Chi_Minh")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     stories: Mapped[list[StoryRow]] = relationship(back_populates="campaign")
@@ -372,6 +375,17 @@ def initialize_lite_schema(sessions: sessionmaker[Session]) -> None:
             }
             if "request_payload" not in task_columns:
                 connection.exec_driver_sql("ALTER TABLE tasks ADD COLUMN request_payload JSON")
+            connection.exec_driver_sql("PRAGMA user_version=5")
+        version = 5
+    if version == 5:
+        with engine.begin() as connection:
+            campaign_columns = {
+                row[1] for row in connection.exec_driver_sql("PRAGMA table_info(campaigns)").all()
+            }
+            if "approval_mode" not in campaign_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE campaigns ADD COLUMN approval_mode VARCHAR(16) NOT NULL DEFAULT 'manual'"
+                )
             connection.exec_driver_sql(f"PRAGMA user_version={LITE_SCHEMA_VERSION}")
         version = LITE_SCHEMA_VERSION
     if version != LITE_SCHEMA_VERSION:
@@ -416,11 +430,17 @@ class StoryRepository:
     def __init__(self, sessions: sessionmaker[Session]):
         self.sessions = sessions
 
-    def create_campaign(self, name: str, source_type: SourceType, target_count: int = 60) -> UUID:
+    def create_campaign(
+        self, name: str, source_type: SourceType, target_count: int = 60,
+        approval_mode: ApprovalMode = ApprovalMode.MANUAL,
+    ) -> UUID:
         if not name.strip() or target_count <= 0:
             raise DomainError("A campaign needs a name and positive target.")
         with self.sessions.begin() as session:
-            campaign = CampaignRow(name=name.strip(), source_type=source_type.value, target_count=target_count)
+            campaign = CampaignRow(
+                name=name.strip(), source_type=source_type.value, target_count=target_count,
+                approval_mode=approval_mode.value,
+            )
             session.add(campaign)
             session.flush()
             session.add(AuditEventRow(entity_type="campaign", entity_id=campaign.id, action="created", outcome="ok"))
@@ -476,6 +496,7 @@ class StoryRepository:
                     "id": str(row.id),
                     "idea": row.idea or "",
                     "stage": row.stage,
+                    "approval_mode": row.campaign.approval_mode,
                     "created_at": row.created_at.replace(tzinfo=timezone.utc).isoformat()
                     if row.created_at.tzinfo is None else row.created_at.isoformat(),
                 }
@@ -490,8 +511,19 @@ class StoryRepository:
             snapshot = mark_production_ready(snapshot_from_row(row), at)
             row.stage = snapshot.stage.value
             row.production_ready_at = snapshot.production_ready_at
+            auto_approved = row.campaign.approval_mode == ApprovalMode.AUTO.value
+            if auto_approved:
+                snapshot = decide_final_review(snapshot, approved=True, at=at)
+                row.stage = snapshot.stage.value
+                row.review_decision_at = snapshot.review_decision_at
             row.row_version += 1
             session.add(AuditEventRow(entity_type="story", entity_id=story_id, action="production_ready", outcome="ok"))
+            if auto_approved:
+                session.add(AuditEventRow(
+                    entity_type="story", entity_id=story_id,
+                    action="auto_final_approved", outcome="ok",
+                    details={"approval_mode": ApprovalMode.AUTO.value},
+                ))
             return snapshot
 
     def record_final_review(self, story_id: UUID, approved: bool, at: datetime) -> StorySnapshot:
@@ -1142,6 +1174,9 @@ class BudgetRepository:
 
     def __init__(self, sessions: sessionmaker[Session]):
         self.sessions = sessions
+        # Lite workers share this repository in one process; serialize SQLite's
+        # read-modify-write budget ledger while provider requests run concurrently.
+        self._lock = RLock()
 
     def create_policy(
         self, version: str, currency: str, daily_limit_minor: int, timezone_name: str,
@@ -1188,6 +1223,13 @@ class BudgetRepository:
         self, version: str, task_attempt_id: UUID, workload: str,
         estimated_minor: int, at: datetime,
     ) -> UUID:
+        with self._lock:
+            return self._reserve(version, task_attempt_id, workload, estimated_minor, at)
+
+    def _reserve(
+        self, version: str, task_attempt_id: UUID, workload: str,
+        estimated_minor: int, at: datetime,
+    ) -> UUID:
         instant = _require_aware(at)
         if not workload.strip() or estimated_minor < 0:
             raise DomainError("Budget reservation needs a workload and non-negative estimate.")
@@ -1221,6 +1263,10 @@ class BudgetRepository:
             return reservation.id
 
     def settle(self, reservation_id: UUID, actual_minor: int, at: datetime) -> None:
+        with self._lock:
+            self._settle(reservation_id, actual_minor, at)
+
+    def _settle(self, reservation_id: UUID, actual_minor: int, at: datetime) -> None:
         settled_at = _require_aware(at)
         if actual_minor < 0:
             raise DomainError("Actual provider cost cannot be negative.")
@@ -1244,6 +1290,10 @@ class BudgetRepository:
             reservation.settled_at = settled_at
 
     def release(self, reservation_id: UUID, at: datetime) -> None:
+        with self._lock:
+            self._release(reservation_id, at)
+
+    def _release(self, reservation_id: UUID, at: datetime) -> None:
         released_at = _require_aware(at)
         with self.sessions.begin() as session:
             reservation = session.scalar(

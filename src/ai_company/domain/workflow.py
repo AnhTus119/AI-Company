@@ -22,6 +22,11 @@ class SourceType(StrEnum):
     AUTONOMOUS = "autonomous"
 
 
+class ApprovalMode(StrEnum):
+    MANUAL = "manual"
+    AUTO = "auto"
+
+
 class StoryStage(StrEnum):
     DRAFT = "draft"
     ADMITTED = "admitted"

@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from ai_company.adapters.database import StoryRepository, initialize_lite_schema, make_session_factory
 from ai_company.api.main import CampaignCreate, StoryCreate, create_app
 from ai_company.application.local_env import load_local_env
-from ai_company.application.provider_config import load_gemini_prototype_settings
+from ai_company.application.provider_config import load_story_agent_settings
 from ai_company.domain.workflow import DomainError, SourceType
 
 
@@ -15,35 +15,36 @@ def configured_environment(tmp_path: Path) -> dict[str, str]:
     return {
         "AI_COMPANY_DATA_DIR": str(tmp_path),
         "AI_COMPANY_REAL_AI_ENABLED": "true",
-        "GEMINI_API_KEY": "local-test-key",
-        "GEMINI_MODEL": "gemini-test-model",
+        "OPENAI_API_KEY": "local-test-key",
+        "OPENAI_MODEL": "gpt-5.6-terra",
         "AI_COMPANY_POLICY_VERSION": "policy-v1",
         "AI_COMPANY_ASSIGNMENT_VERSION": "models-v1",
         "AI_COMPANY_BUDGET_VERSION": "budget-v1",
         "AI_COMPANY_DAILY_BUDGET_MINOR": "100",
         "AI_COMPANY_BUDGET_CURRENCY": "USD",
-        "AI_COMPANY_GEMINI_RATE_CARD_VERSION": "rate-v1",
-        "AI_COMPANY_GEMINI_INPUT_MINOR_PER_MILLION": "75",
-        "AI_COMPANY_GEMINI_OUTPUT_MINOR_PER_MILLION": "375",
-        "AI_COMPANY_GEMINI_MAX_OUTPUT_TOKENS": "6000",
-        "AI_COMPANY_GEMINI_TIMEOUT_SECONDS": "60",
+        "AI_COMPANY_OPENAI_RATE_CARD_VERSION": "gpt-5.6-terra-standard-test",
+        "AI_COMPANY_OPENAI_INPUT_MINOR_PER_MILLION": "200",
+        "AI_COMPANY_OPENAI_OUTPUT_MINOR_PER_MILLION": "1200",
+        "AI_COMPANY_OPENAI_MAX_OUTPUT_TOKENS": "6000",
+        "AI_COMPANY_OPENAI_TIMEOUT_SECONDS": "60",
     }
 
 
 def test_real_provider_configuration_is_fail_closed(tmp_path: Path) -> None:
     with pytest.raises(DomainError, match="configuration is missing"):
-        load_gemini_prototype_settings({"AI_COMPANY_REAL_AI_ENABLED": "true"})
-    settings = load_gemini_prototype_settings(configured_environment(tmp_path))
-    assert settings.enabled and settings.model == "gemini-test-model"
-    assert settings.rate_card.upper_bound(10_000, 2_000) == 2
+        load_story_agent_settings({"AI_COMPANY_REAL_AI_ENABLED": "true"})
+    settings = load_story_agent_settings(configured_environment(tmp_path))
+    assert settings.enabled and settings.model == "gpt-5.6-terra"
+    assert settings.rate_card.upper_bound(10_000, 2_000) == 5
+    assert settings.chapter_pipeline_mode == "fast"
 
 
-def test_story_agent_can_assign_openai_primary_with_gemini_fallback(tmp_path: Path) -> None:
+def test_story_agent_rejects_fallback_and_non_terra_model(tmp_path: Path) -> None:
     environment = configured_environment(tmp_path) | {
         "AI_COMPANY_STORY_ARCHITECT_PROVIDER": "openai",
         "AI_COMPANY_STORY_ARCHITECT_FALLBACKS": "gemini",
         "OPENAI_API_KEY": "local-openai-test-key",
-        "OPENAI_MODEL": "gpt-test-model",
+        "OPENAI_MODEL": "gpt-5.6-terra",
         "OPENAI_BASE_URL": "https://api.openai.com/v1",
         "AI_COMPANY_OPENAI_RATE_CARD_VERSION": "openai-rate-v1",
         "AI_COMPANY_OPENAI_INPUT_MINOR_PER_MILLION": "100",
@@ -51,29 +52,31 @@ def test_story_agent_can_assign_openai_primary_with_gemini_fallback(tmp_path: Pa
         "AI_COMPANY_OPENAI_MAX_OUTPUT_TOKENS": "6000",
         "AI_COMPANY_OPENAI_TIMEOUT_SECONDS": "60",
     }
-    settings = load_gemini_prototype_settings(environment)
-    assert settings.ordered_providers == ("openai", "gemini")
-    assert settings.providers["openai"].model == "gpt-test-model"
-    assert settings.providers["gemini"].model == "gemini-test-model"
+    with pytest.raises(DomainError, match="must use openai"):
+        load_story_agent_settings(environment)
+    environment["AI_COMPANY_STORY_ARCHITECT_FALLBACKS"] = ""
+    environment["OPENAI_MODEL"] = "gpt-other"
+    with pytest.raises(DomainError, match="gpt-5.6-terra"):
+        load_story_agent_settings(environment)
 
 
-def test_story_roles_inherit_architect_route_and_can_be_overridden(tmp_path: Path) -> None:
+def test_story_roles_all_inherit_openai_terra(tmp_path: Path) -> None:
     environment = configured_environment(tmp_path) | {
-        "AI_COMPANY_EDITOR_PROVIDER": "gemini",
+        "AI_COMPANY_EDITOR_PROVIDER": "openai",
         "AI_COMPANY_CONTINUITY_QC_PROVIDER": "openai",
         "OPENAI_API_KEY": "local-openai-test-key",
-        "OPENAI_MODEL": "gpt-test-model",
+        "OPENAI_MODEL": "gpt-5.6-terra",
         "AI_COMPANY_OPENAI_RATE_CARD_VERSION": "openai-rate-v1",
         "AI_COMPANY_OPENAI_INPUT_MINOR_PER_MILLION": "100",
         "AI_COMPANY_OPENAI_OUTPUT_MINOR_PER_MILLION": "500",
         "AI_COMPANY_OPENAI_MAX_OUTPUT_TOKENS": "6000",
         "AI_COMPANY_OPENAI_TIMEOUT_SECONDS": "60",
     }
-    settings = load_gemini_prototype_settings(environment)
-    assert settings.route_for("chapter_writer").ordered_providers == ("gemini",)
-    assert settings.route_for("chapter_editor").ordered_providers == ("gemini",)
+    settings = load_story_agent_settings(environment)
+    assert settings.route_for("chapter_writer").ordered_providers == ("openai",)
+    assert settings.route_for("chapter_editor").ordered_providers == ("openai",)
     assert settings.route_for("continuity_qc").ordered_providers == ("openai",)
-    assert set(settings.providers) == {"gemini", "openai"}
+    assert set(settings.providers) == {"openai"}
 
 
 def test_local_env_loads_only_allowlisted_settings_without_overrides(tmp_path: Path, monkeypatch) -> None:

@@ -19,7 +19,7 @@ from ai_company.adapters.database import (
 from ai_company.application.mock_chapters import mock_blueprint_key, mock_chapters_key
 from ai_company.application.mock_export import verified_mock_artifact
 from ai_company.application.mock_package import mock_package_key
-from ai_company.application.provider_config import load_story_agent_settings
+from ai_company.application.provider_config import REQUIRED_OPENAI_MODEL, load_story_agent_settings
 from ai_company.application.novel_workspace import (
     ChapterDraftInput, ForeshadowInput, NovelWorkspace,
     add_foreshadow, apply_chapter_draft, materialize_workspace, render_complete_story,
@@ -27,13 +27,14 @@ from ai_company.application.novel_workspace import (
 from ai_company.application.real_blueprint import real_blueprint_key
 from ai_company.application.real_chapter import CHAPTER_TASK_TYPE, real_chapter_key
 from ai_company.application.runtime import RuntimeProfile, load_runtime_settings
-from ai_company.domain.workflow import DomainError, SourceType, StorySnapshot
+from ai_company.domain.workflow import ApprovalMode, DomainError, SourceType, StorySnapshot
 
 
 class CampaignCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     source_type: SourceType
     target_count: int = Field(default=60, gt=0)
+    approval_mode: ApprovalMode = ApprovalMode.MANUAL
 
 
 class StoryCreate(BaseModel):
@@ -109,13 +110,39 @@ def create_app(
     def health() -> dict:
         return {"status": "ok" if repository.health() else "unavailable"}
 
+    @app.get("/operator/capabilities")
+    def operator_capabilities() -> dict:
+        runtime = load_runtime_settings()
+        return {
+            "text": {
+                "provider": "openai", "model": REQUIRED_OPENAI_MODEL,
+                "structured_outputs": True,
+                "chapter_pipeline_modes": ["fast", "quality"],
+            },
+            "worker": {
+                "profile": runtime.profile.value,
+                "max_concurrency": runtime.max_local_workers,
+            },
+            "approval_modes": ["manual", "auto"],
+            "video": {
+                "real_provider_integrated": False,
+                "mock_renderer_available": True,
+                "reason": "gpt-5.6-terra does not generate video",
+            },
+        }
+
     @app.post("/campaigns", status_code=201)
     def create_campaign(body: CampaignCreate) -> dict:
         try:
-            campaign_id = repository.create_campaign(body.name, body.source_type, body.target_count)
+            campaign_id = repository.create_campaign(
+                body.name, body.source_type, body.target_count, body.approval_mode,
+            )
         except DomainError as exc:
             raise HTTPException(422, str(exc)) from exc
-        return {"id": str(campaign_id), "status": "draft"}
+        return {
+            "id": str(campaign_id), "status": "draft",
+            "approval_mode": body.approval_mode.value,
+        }
 
     @app.post("/campaigns/{campaign_id}/stories", status_code=201)
     def create_story(campaign_id: UUID, body: StoryCreate) -> dict:

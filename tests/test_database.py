@@ -15,7 +15,7 @@ from ai_company.adapters.database import (
     StoryRepository,
     StoryRow,
 )
-from ai_company.domain.workflow import DomainError, GateName, GateOutcome, SourceType, StoryStage
+from ai_company.domain.workflow import ApprovalMode, DomainError, GateName, GateOutcome, SourceType, StoryStage
 
 
 @pytest.fixture
@@ -78,3 +78,34 @@ def test_ready_and_rejection_keep_original_kpi_timestamp(repository) -> None:
     assert rejected.production_ready_at == ready.production_ready_at == ready_at
     assert rejected.stage == StoryStage.HUMAN_REJECTED
     assert repository.get_story(story_id).production_ready_at == ready_at
+
+
+def test_auto_approval_runs_only_after_production_gates_pass(repository) -> None:
+    campaign_id = repository.create_campaign(
+        "Auto", SourceType.USER_IDEA, 1, ApprovalMode.AUTO,
+    )
+    story_id = repository.create_story(campaign_id, SourceType.USER_IDEA, "A fictional premise")
+    with pytest.raises(DomainError, match="automated gates"):
+        repository.record_production_ready(story_id, datetime.now(timezone.utc))
+    with repository.sessions.begin() as session:
+        row = session.get(StoryRow, story_id)
+        row.stage = StoryStage.AUTOMATED_GATES.value
+        row.planned_chapters = 20
+        row.has_story_bible = True
+        row.has_hook_contract = True
+        for number in range(1, 21):
+            session.add(ChapterRow(
+                story_id=story_id, number=number, title=f"Chapter {number}",
+                recap=None if number == 1 else "Previously", content="Fictional story text.",
+            ))
+        for name in GateName:
+            session.add(GateRow(story_id=story_id, gate_name=name.value, outcome=GateOutcome.PASS.value))
+        for filename in ("hook.mp4", "hook.srt", "story.txt", "caption.txt", "comment.txt"):
+            session.add(ArtifactRow(
+                story_id=story_id, filename=filename, storage_uri=f"artifact://{filename}",
+                sha256_hex=sha256(filename.encode()).hexdigest(), byte_size=len(filename),
+                verified=True, is_mock=False,
+            ))
+    approved = repository.record_production_ready(story_id, datetime.now(timezone.utc))
+    assert approved.stage == StoryStage.APPROVED
+    assert approved.production_ready_at is not None and approved.review_decision_at is not None

@@ -29,12 +29,18 @@ class LiteWorker:
         worker_id: str,
         resource_reader: Callable[[], ResourceSnapshot],
         minimum_available_mb_by_type: Mapping[str, int] | None = None,
+        max_active_tasks: int = 1,
+        lease_seconds: int = 900,
     ) -> None:
         self.tasks = tasks
         self.handlers = handlers
         self.worker_id = worker_id
         self.resource_reader = resource_reader
         self.minimum_available_mb_by_type = minimum_available_mb_by_type or {}
+        if max_active_tasks <= 0 or lease_seconds <= 0:
+            raise ValueError("Worker capacity and lease must be positive.")
+        self.max_active_tasks = max_active_tasks
+        self.lease_seconds = lease_seconds
 
     def run_once(self, *, provider_slots: int, budget_slots: int) -> str:
         now = datetime.now(timezone.utc)
@@ -50,7 +56,11 @@ class LiteWorker:
         )
         if capacity == 0:
             return "deferred_capacity"
-        if not self.tasks.claim_task(task_id, self.worker_id, now, max_active_tasks=1):
+        if not self.tasks.claim_task(
+            task_id, self.worker_id, now,
+            lease_seconds=self.lease_seconds,
+            max_active_tasks=self.max_active_tasks,
+        ):
             return "not_claimed"
         try:
             checkpoint = self.handlers[task_type](task_id)
@@ -85,6 +95,8 @@ def make_mock_lite_worker(
     worker_id: str,
     resource_reader: Callable[[], ResourceSnapshot] = read_resources,
     output_root: Path | None = None,
+    *,
+    max_active_tasks: int = 1,
 ) -> LiteWorker:
     """Wire the offline smoke-test handler; no real provider is loaded."""
     stories = StoryRepository(sessions)
@@ -102,4 +114,5 @@ def make_mock_lite_worker(
         worker_id,
         resource_reader,
         {"mock_package": 768},
+        max_active_tasks,
     )

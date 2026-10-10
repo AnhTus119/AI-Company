@@ -1,126 +1,79 @@
-# Thiết lập OpenAI/Gemini agent và MuMuAINovel
+# Thiết lập GPT-5.6-Terra và MuMuAINovel
 
-Hệ thống không thay ChatGPT bằng Gemini. Các vai `story_architect`, `chapter_writer`, `editor` và `continuity_qc` đều có provider chính và các provider dự phòng đã được chủ dự án duyệt. Fallback chỉ chạy khi lỗi có thể thử lại (mất kết nối, dịch vụ tạm lỗi, rate/quota limit); lỗi key, policy, schema hoặc nội dung bị từ chối không tự chuyển provider.
+Runtime hiện khóa duy nhất OpenAI `gpt-5.6-terra` qua Responses API. Gemini và fallback đa provider không còn được dùng. ChatGPT trên web và OpenAI API là hai sản phẩm/billing riêng; tài khoản ChatGPT không tự cấp API credit.
 
-## 1. Chọn route agent
+## 1. Lấy OpenAI API key
 
-Trong `.env`, chọn một trong các cấu hình sau.
+1. Mở https://platform.openai.com/api-keys và đăng nhập OpenAI Platform.
+2. Tạo Project API key, lưu key ngay khi nó xuất hiện.
+3. Kiểm tra Billing/Limits của project. Không paste key vào chat, GitHub, `.env.example` hoặc ảnh chụp.
+4. Chỉ paste key vào `OPENAI_API_KEY=` trong file `.env` cục bộ.
 
-Model mặc định đã được điền trong `.env.example` theo tài liệu chính thức ngày 2026-10-10:
+## 2. Cấu hình `.env` thủ công
 
-- OpenAI: `gpt-6.1-sol`, cân bằng chất lượng/chi phí cho production qua Responses API.
-- Gemini: `gemini-3.8-flash`, model Flash stable hiện hành.
-
-Giá trong file mẫu là bảng giá standard tại ngày ghi trong `RATE_CARD_VERSION`; luôn đối chiếu lại trước khi duyệt vì provider có thể đổi giá.
-
-OpenAI làm chính, Gemini dự phòng:
+Sao chép các giá trị không bí mật từ `.env.example` vào `.env` và giữ key chỉ ở `.env`:
 
 ```dotenv
 AI_COMPANY_REAL_AI_ENABLED=true
+AI_COMPANY_LITE_CONCURRENCY=2
 AI_COMPANY_STORY_ARCHITECT_PROVIDER=openai
-AI_COMPANY_STORY_ARCHITECT_FALLBACKS=gemini
+AI_COMPANY_STORY_ARCHITECT_FALLBACKS=
 
-OPENAI_API_KEY=key-openai-cua-ban
-OPENAI_MODEL=model-id-chinh-xac
+OPENAI_API_KEY=key-cua-ban
+OPENAI_MODEL=gpt-5.6-terra
 OPENAI_BASE_URL=https://api.openai.com/v1
 
-GEMINI_API_KEY=key-gemini-cua-ban
-GEMINI_MODEL=model-id-chinh-xac
-```
-
-Chỉ dùng OpenAI thì để `AI_COMPANY_STORY_ARCHITECT_FALLBACKS=`. Chỉ dùng Gemini thì đặt provider chính là `gemini`. Không nhập tên `chatgpt`; provider tự động là `openai`, còn model phải là model ID mà tài khoản API truy cập được.
-
-Ba vai viết chương mặc định kế thừa route trên. Nếu muốn phân vai, thêm các dòng sau; để trống nghĩa là kế thừa Story Architect:
-
-```dotenv
-AI_COMPANY_CHAPTER_WRITER_PROVIDER=gemini
-AI_COMPANY_CHAPTER_WRITER_FALLBACKS=openai
-AI_COMPANY_EDITOR_PROVIDER=openai
-AI_COMPANY_EDITOR_FALLBACKS=gemini
-AI_COMPANY_CONTINUITY_QC_PROVIDER=openai
-AI_COMPANY_CONTINUITY_QC_FALLBACKS=gemini
-```
-
-Ví dụ này để Gemini viết nháp, còn OpenAI biên tập và kiểm tra continuity. Chỉ các provider xuất hiện trong route mới cần key/model/rate card.
-
-Với từng provider được đưa vào route, điền rate card, giới hạn output và timeout tương ứng trong `.env`. Giá là **cent USD trên một triệu token**. Sao chép giá hiện tại từ trang chính thức của provider, không dùng số ví dụ cũ.
-
-```dotenv
-AI_COMPANY_POLICY_VERSION=story-agents-policy-v1
-AI_COMPANY_ASSIGNMENT_VERSION=story-agents-models-v1
-AI_COMPANY_BUDGET_VERSION=story-agents-budget-v1
-AI_COMPANY_DAILY_BUDGET_MINOR=100
+AI_COMPANY_POLICY_VERSION=story-agents-policy-v2-terra-only
+AI_COMPANY_ASSIGNMENT_VERSION=story-agents-models-v2-terra-only
+AI_COMPANY_BUDGET_VERSION=story-agents-budget-v2-terra-only
+AI_COMPANY_DAILY_BUDGET_MINOR=500
 AI_COMPANY_BUDGET_CURRENCY=USD
 
-AI_COMPANY_OPENAI_RATE_CARD_VERSION=ten-va-ngay-rate-card
-AI_COMPANY_OPENAI_INPUT_MINOR_PER_MILLION=gia-input
-AI_COMPANY_OPENAI_OUTPUT_MINOR_PER_MILLION=gia-output
+AI_COMPANY_OPENAI_RATE_CARD_VERSION=gpt-5.6-terra-standard-2026-10-10
+AI_COMPANY_OPENAI_INPUT_MINOR_PER_MILLION=200
+AI_COMPANY_OPENAI_OUTPUT_MINOR_PER_MILLION=1200
 AI_COMPANY_OPENAI_MAX_OUTPUT_TOKENS=6000
 AI_COMPANY_OPENAI_TIMEOUT_SECONDS=60
+AI_COMPANY_OPENAI_SERVICE_TIER=default
+
+AI_COMPANY_CHAPTER_PIPELINE_MODE=fast
+AI_COMPANY_STORY_ARCHITECT_REASONING_EFFORT=low
+AI_COMPANY_CHAPTER_WRITER_REASONING_EFFORT=none
+AI_COMPANY_EDITOR_REASONING_EFFORT=none
+AI_COMPANY_CONTINUITY_QC_REASONING_EFFORT=low
 ```
 
-Gemini dùng nhóm biến tương tự đã có trong `.env.example`. Sau khi kiểm tra, chạy `Setup-AI-Agents.cmd` đúng một lần. Khi đổi route/model/giá/policy, tăng cả ba version sang một tên chưa từng dùng (ví dụ `v2`, rồi `v3`) trước khi chạy setup lại; snapshot cũ là bất biến.
+`fast` dùng một provider call cho mỗi chương nhưng vẫn yêu cầu schema và `passed=true`; `quality` dùng ba call độc lập writer/editor/QC. `AI_COMPANY_LITE_CONCURRENCY=2` xử lý tối đa hai story cùng lúc. Nếu máy thiếu RAM hoặc gặp SQLite contention, giảm về `1`; không tăng quá `4`.
 
-Trước khi duyệt snapshot, có thể chạy `Test-AI-Providers.cmd`. Lệnh này chỉ gọi endpoint metadata model để xác nhận key được chấp nhận và model nhìn thấy được; nó không gửi premise/chương và không lưu key. `Setup-AI-Agents.cmd` cũng tự chạy kiểm tra này trước khi ghi approval.
+`AI_COMPANY_OPENAI_SERVICE_TIER=fast` chỉ được bật sau khi bạn thay rate card bằng bảng giá Fast đã kiểm tra và tên version chứa `fast`. Hệ thống cố ý từ chối Fast với bảng giá standard để không âm thầm đánh giá thiếu chi phí.
 
-Kiểm tra trước khi chạy:
+## 3. Duyệt cấu hình và chạy
+
+Mỗi khi đổi model, giá, policy hoặc route, dùng ba version hoàn toàn mới. Sau đó:
 
 ```powershell
 python launch_local.py --check
+Test-AI-Providers.cmd
+Setup-AI-Agents.cmd
+Start-AI-Company.cmd
 ```
 
-Nút **Tạo dàn ý AI thật** trên dashboard sẽ gọi provider chính đã duyệt. Sau khi tạo Novel Workspace, nút viết chương chạy tuần tự `chapter_writer → editor → continuity_qc`. Nút **Tự chạy ... đến chương 20** dùng các task nhỏ nối tiếp nhau, nên từng chương vẫn có lease, budget reservation và provider audit riêng. Chuỗi tự dừng nếu QC không đạt, hết ngân sách hoặc provider lỗi. Chỉ khi QC trả về `passed=true` thì chương đã biên tập mới được lưu; nếu không, draft vẫn nằm trong checkpoint task với trạng thái `needs_revision`.
+Lệnh test provider chỉ kiểm tra key/model visibility, không gửi story. Setup ghi policy, assignment và budget đã duyệt. Dashboard cho chọn `manual` hoặc `auto`; auto chỉ có hiệu lực khi package thật vượt đủ gate.
 
-## Lấy key còn thiếu
+## 4. Video thật hiện chưa được tích hợp
 
-- Gemini: vào [Google AI Studio API Keys](https://aistudio.google.com/app/apikey), tạo key trong project của bạn, rồi paste vào `GEMINI_API_KEY` trong `.env`. Nên dùng auth key/restricted key dành riêng cho Gemini API.
-- OpenAI: đăng nhập [OpenAI Platform API Keys](https://platform.openai.com/api-keys), tạo project key mới, lưu ngay khi key được hiển thị và paste vào `OPENAI_API_KEY` trong `.env`. Gói ChatGPT và OpenAI API là hai sản phẩm/billing riêng; dùng ChatGPT trên web không tự cấp API key hoặc API credit.
+`gpt-5.6-terra` nhận text/image và trả text; nó không tạo video. Hệ thống hiện chỉ có `hook.mp4` mock để kiểm tra pipeline, không được tính production-ready. Muốn hook video thật phải chọn thêm một video provider/model riêng, rồi triển khai adapter, job polling/download, cost ledger, continuity QC và license/provenance. Điều này không thể đồng thời thỏa điều kiện “chỉ dùng một model GPT-5.6-Terra”.
 
-Không paste key vào chat, GitHub, `.env.example` hoặc ảnh chụp màn hình. Nếu một key từng bị lộ, revoke key đó và tạo key mới.
+## 5. MuMuAINovel là tùy chọn, không phải model provider
 
-## 2. Novel Workspace native không cần đăng nhập
+Core Novel Workspace lưu Story Bible, nhân vật, outline, chapter, continuity/open loops và foreshadow trong SQLite local, không cần đăng nhập.
 
-AI Company đã có workspace native riêng cho Story Bible, nhân vật, 20 outline, chapter draft, continuity/open loops và foreshadow. Sau khi real blueprint hoàn tất, bấm **Tạo Novel Workspace local** trên dashboard. Phần này chạy trong SQLite/API local, không yêu cầu username/password và không phụ thuộc MuMuAINovel. Xem [Novel Workspace](NATIVE_NOVEL_WORKSPACE.md).
-
-## 3. Tùy chọn: cài MuMuAINovel như workspace riêng
-
-MuMuAINovel là ứng dụng viết tiểu thuyết, không phải model provider. Giữ nó thành service riêng để tránh trộn mã GPLv3 và database của hai dự án.
-
-1. Cài Docker Desktop.
-2. Clone repository chính thức `https://github.com/xiamuceer-j/MuMuAINovel.git` vào một thư mục ngoài AI Company.
-3. Sao chép `backend/.env.example` thành `.env` trong thư mục MuMuAINovel.
-4. Đổi `APP_PORT=8800`, đặt mật khẩu PostgreSQL mạnh, bật local auth và đổi username/password mặc định. Vì chạy HTTP local, đặt `SESSION_COOKIE_SECURE=false`.
-5. Điền ít nhất một AI provider vào `.env` của MuMuAINovel, rồi chạy `docker compose up -d` theo README upstream.
-6. Mở `http://127.0.0.1:8800` và xác nhận đăng nhập được.
-
-Lưu ý: các cuộc gọi model do MuMuAINovel tự thực hiện **không nằm trong budget ledger của AI Company**. Đặt spend limit riêng ở provider hoặc chỉ dùng MuMu để biên tập/viết tiếp sau khi AI Company đã tạo blueprint.
-
-## 4. Tùy chọn: nối AI Company với MuMuAINovel
-
-Thêm vào `.env` của AI Company:
-
-```dotenv
-MUMUAINOVEL_BASE_URL=http://127.0.0.1:8800
-MUMUAINOVEL_USERNAME=ten-local-cua-ban
-MUMUAINOVEL_PASSWORD=mat-khau-local-cua-ban
-```
-
-Kiểm tra service:
+MuMuAINovel chỉ là workspace riêng tùy chọn. AI Company không sao chép code GPLv3 upstream và không phụ thuộc vào nó. Nếu dùng, chạy service ở localhost, đặt `MUMUAINOVEL_BASE_URL`, username/password trong `.env`, rồi dùng:
 
 ```powershell
 python -m ai_company.application.mumu_cli status
-```
-
-Sau khi một real blueprint hoàn tất, lấy story ID trên dashboard/API và xuất file tương thích schema MuMuAINovel v1.1.0:
-
-```powershell
 python -m ai_company.application.mumu_cli export --story-id STORY_ID --output ".\mumu-project.json"
-```
-
-Hoặc đăng nhập local, validate rồi import trực tiếp:
-
-```powershell
 python -m ai_company.application.mumu_cli push --story-id STORY_ID --output ".\mumu-project.json"
 ```
 
-Cầu nối chỉ cho phép `http://127.0.0.1`/`localhost`, không gửi mật khẩu MuMu lên server khác. Nó chuyển title, Story Bible, nhân vật và đúng 20 chapter objectives thành project/characters/outlines; MuMu tiếp tục quản lý quan hệ, chương, ký ức, foreshadow và biên tập.
+Các call model do MuMu tự chạy không nằm trong budget ledger của AI Company; nên dùng MuMu chủ yếu để xem/biên tập project đã xuất.

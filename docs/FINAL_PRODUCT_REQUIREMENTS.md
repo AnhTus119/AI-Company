@@ -128,7 +128,7 @@ The daily production target is 60 production-ready packages. A package is produc
 
 The dashboard shows Production KPI, Ready for Approval, Approved, Rejected, and Regenerated separately. The system stops by default after 60 production-ready packages and offers the user a Continue action.
 
-Final human approval is always required as a separate operational/quality workflow. Hook QC may auto-approve after a 10-second wait if it passes; the user may inspect/review it instead.
+Final approval is a separate operational/quality workflow. Campaigns default to `manual`; the operator may explicitly choose `auto`, which can approve only after every mandatory automated gate passes and all real artifacts are verified. Hook QC may auto-approve after a 10-second wait if it passes; the user may inspect/review it instead.
 
 At most 10 final packages may wait for human approval by default. On reaching the limit, the system does not admit new stories into production or create additional final packages; running jobs may safely complete their current stage. A decision frees a slot. This maximum will be configurable later.
 

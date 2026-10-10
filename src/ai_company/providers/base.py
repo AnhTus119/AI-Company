@@ -13,6 +13,8 @@ class StructuredRequest:
     json_schema: dict
     max_output_tokens: int
     temperature: float = 0.7
+    reasoning_effort: str = "low"
+    service_tier: str = "default"
 
 
 @dataclass(frozen=True)

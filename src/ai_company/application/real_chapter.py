@@ -60,6 +60,17 @@ class ContinuityQcOutput(BaseModel):
     close_open_loops: list[str] = Field(default_factory=list, max_length=20)
 
 
+class FastChapterOutput(EditorOutput):
+    """One-call writer/editor/QC result for throughput-sensitive production."""
+
+    passed: bool
+    continuity_issues: list[str] = Field(default_factory=list, max_length=30)
+    unresolved_risks: list[str] = Field(default_factory=list, max_length=30)
+    continuity_notes: list[str] = Field(default_factory=list, max_length=20)
+    new_open_loops: list[str] = Field(default_factory=list, max_length=20)
+    close_open_loops: list[str] = Field(default_factory=list, max_length=20)
+
+
 def _bounded_chapter(content: str) -> str:
     words = re.findall(r"[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)*", content)
     if not 500 <= len(words) <= 700:
@@ -100,6 +111,24 @@ QC_SCHEMA = {
         "new_open_loops", "close_open_loops",
     ],
     "properties": {
+        "passed": {"type": "boolean"},
+        "continuity_issues": {"type": "array", "items": {"type": "string"}, "maxItems": 30},
+        "unresolved_risks": {"type": "array", "items": {"type": "string"}, "maxItems": 30},
+        "continuity_notes": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
+        "new_open_loops": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
+        "close_open_loops": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
+    },
+}
+
+FAST_CHAPTER_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "title", "content", "summary", "editor_notes", "passed", "continuity_issues",
+        "unresolved_risks", "continuity_notes", "new_open_loops", "close_open_loops",
+    ],
+    "properties": {
+        **EDITOR_SCHEMA["properties"],
         "passed": {"type": "boolean"},
         "continuity_issues": {"type": "array", "items": {"type": "string"}, "maxItems": 30},
         "unresolved_risks": {"type": "array", "items": {"type": "string"}, "maxItems": 30},
@@ -163,6 +192,19 @@ def _qc_prompt(context: dict, edited: EditorOutput) -> str:
     )
 
 
+def _fast_pipeline_prompt(context: dict) -> str:
+    return (
+        "You are a bounded fiction production pipeline. Internally perform three passes in order: write the "
+        "chapter, edit it for clarity/pacing, then independently check continuity. Return only the final edited "
+        "chapter and the requested QC fields as schema-valid JSON. The chapter must be original English drama "
+        "of 500-700 words for adult mobile readers. Preserve the Story Bible, exact outline, chronology, character "
+        "facts, open loops, and planned payoffs. Set passed=false and list concrete issues if the final chapter has "
+        "any material contradiction, missing required turn, unsafe content, or unsupported fact. Do not expose "
+        "chain-of-thought; editor_notes must be concise outcome notes only.\n\nSTORY CONTEXT:\n"
+        + json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+    )
+
+
 class RealChapterPipelineHandler:
     def __init__(
         self,
@@ -197,27 +239,54 @@ class RealChapterPipelineHandler:
             raise DomainError("Real chapters must be generated in sequential order.")
         attempt_id = self.tasks.get_active_attempt_id(task_id, self.worker_id)
         context = _context(workspace, chapter_number)
-        writer, writer_audit = self.runner.run(
-            attempt_id=attempt_id,
-            workload="chapter_writer",
-            prompt=_writer_prompt(context),
-            json_schema=WRITER_SCHEMA,
-            output_model=WriterOutput,
-        )
-        editor, editor_audit = self.runner.run(
-            attempt_id=attempt_id,
-            workload="chapter_editor",
-            prompt=_editor_prompt(context, writer),
-            json_schema=EDITOR_SCHEMA,
-            output_model=EditorOutput,
-        )
-        qc, qc_audit = self.runner.run(
-            attempt_id=attempt_id,
-            workload="continuity_qc",
-            prompt=_qc_prompt(context, editor),
-            json_schema=QC_SCHEMA,
-            output_model=ContinuityQcOutput,
-        )
+        if self.runner.settings.chapter_pipeline_mode == "fast":
+            combined, combined_audit = self.runner.run(
+                attempt_id=attempt_id,
+                workload="chapter_writer",
+                prompt=_fast_pipeline_prompt(context),
+                json_schema=FAST_CHAPTER_SCHEMA,
+                output_model=FastChapterOutput,
+            )
+            editor = EditorOutput(
+                title=combined.title, content=combined.content, summary=combined.summary,
+                editor_notes=combined.editor_notes,
+            )
+            qc = ContinuityQcOutput(
+                passed=combined.passed,
+                continuity_issues=combined.continuity_issues,
+                unresolved_risks=combined.unresolved_risks,
+                continuity_notes=combined.continuity_notes,
+                new_open_loops=combined.new_open_loops,
+                close_open_loops=combined.close_open_loops,
+            )
+            audit = {"fast_pipeline": combined_audit}
+        else:
+            writer, writer_audit = self.runner.run(
+                attempt_id=attempt_id,
+                workload="chapter_writer",
+                prompt=_writer_prompt(context),
+                json_schema=WRITER_SCHEMA,
+                output_model=WriterOutput,
+            )
+            editor, editor_audit = self.runner.run(
+                attempt_id=attempt_id,
+                workload="chapter_editor",
+                prompt=_editor_prompt(context, writer),
+                json_schema=EDITOR_SCHEMA,
+                output_model=EditorOutput,
+            )
+            qc, qc_audit = self.runner.run(
+                attempt_id=attempt_id,
+                workload="continuity_qc",
+                prompt=_qc_prompt(context, editor),
+                json_schema=QC_SCHEMA,
+                output_model=ContinuityQcOutput,
+            )
+            audit = {
+                "chapter_writer": writer_audit,
+                "editor": editor_audit,
+                "continuity_qc": qc_audit,
+            }
         checkpoint = {
             "kind": "real_chapter_pipeline",
             "schema_version": 1,
@@ -226,11 +295,8 @@ class RealChapterPipelineHandler:
             "workspace_version": expected_version,
             "chapter": editor.model_dump(mode="json"),
             "qc": qc.model_dump(mode="json"),
-            "audit": {
-                "chapter_writer": writer_audit,
-                "editor": editor_audit,
-                "continuity_qc": qc_audit,
-            },
+            "pipeline_mode": self.runner.settings.chapter_pipeline_mode,
+            "audit": audit,
         }
         if not qc.passed:
             return {**checkpoint, "state": "needs_revision"}

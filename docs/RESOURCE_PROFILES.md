@@ -6,7 +6,7 @@ This document supersedes the single-stack PostgreSQL/RabbitMQ assumption in Phas
 
 | Profile | Intended deployment | Authoritative state | Work transport | Local concurrency |
 |---|---|---|---|---|
-| `lite` (default) | One low-memory Windows PC, including the current 4 GB prototype machine | SQLite database on a local, non-synced disk, WAL mode | Database polling against durable tasks | At most one worker; zero when memory/budget/provider headroom is insufficient |
+| `lite` (default) | One low-memory Windows PC, including the current 4 GB prototype machine | SQLite database on a local, non-synced disk, WAL mode | Database polling against durable tasks | Two I/O workers by default (configurable 1–4); each still defers when memory/budget/provider headroom is insufficient |
 | `standard` | Stronger single PC or future multi-process deployment | PostgreSQL | Dramatiq + RabbitMQ; database still controls task claims and transitions | Calculated from actual RAM/CPU, provider limits, budget, queue, and requested cap |
 
 ## Hardware validation targets

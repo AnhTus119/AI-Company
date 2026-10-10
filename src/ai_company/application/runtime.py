@@ -45,11 +45,17 @@ def load_runtime_settings(environment: Mapping[str, str] | None = None) -> Runti
         raise DomainError("AI_COMPANY_PROFILE must be 'lite' or 'standard'.") from exc
 
     if profile == RuntimeProfile.LITE:
+        try:
+            lite_concurrency = int(values.get("AI_COMPANY_LITE_CONCURRENCY", "2"))
+        except ValueError as exc:
+            raise DomainError("AI_COMPANY_LITE_CONCURRENCY must be an integer.") from exc
+        if not 1 <= lite_concurrency <= 4:
+            raise DomainError("AI_COMPANY_LITE_CONCURRENCY must be between 1 and 4.")
         data_dir = default_data_dir(values)
         database_url = URL.create(
             "sqlite+pysqlite", database=str(data_dir / "state.sqlite3")
         ).render_as_string(hide_password=False)
-        return RuntimeSettings(profile, database_url, data_dir, "database_polling", 1)
+        return RuntimeSettings(profile, database_url, data_dir, "database_polling", lite_concurrency)
 
     database_url = values.get("DATABASE_URL", "")
     if not database_url.startswith("postgresql+"):

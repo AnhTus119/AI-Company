@@ -6,7 +6,7 @@ import argparse
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread
 
 from ai_company.adapters.database import (
     BudgetRepository, GovernanceRepository, NovelWorkspaceRepository, StoryRepository, TaskRepository,
@@ -37,37 +37,65 @@ def main() -> None:
     tasks = TaskRepository(sessions)
     tasks.hold_interrupted_tasks(datetime.now(timezone.utc))
     output_root = Path(os.environ.get("ARTIFACT_ROOT") or settings.data_dir / "artifacts")
-    worker_id = "lite-cli"
-    worker = make_mock_lite_worker(sessions, worker_id, output_root=output_root)
     provider_settings = load_story_agent_settings()
-    if provider_settings.enabled:
-        governance = GovernanceRepository(sessions)
-        budgets = BudgetRepository(sessions)
-        bindings = build_provider_bindings(provider_settings)
-        worker.handlers["real_blueprint"] = RealBlueprintHandler(
-            StoryRepository(sessions), tasks, governance,
-            budgets, bindings,
-            provider_settings, worker_id,
+    concurrency = settings.max_local_workers or 1
+    governance = GovernanceRepository(sessions) if provider_settings.enabled else None
+    budgets = BudgetRepository(sessions) if provider_settings.enabled else None
+    bindings = build_provider_bindings(provider_settings) if provider_settings.enabled else {}
+
+    def build_worker(index: int):
+        worker_id = f"lite-cli-{index}"
+        worker = make_mock_lite_worker(
+            sessions, worker_id, output_root=output_root, max_active_tasks=concurrency,
         )
-        worker.handlers[CHAPTER_TASK_TYPE] = RealChapterPipelineHandler(
-            tasks,
-            NovelWorkspaceRepository(sessions),
-            BudgetedStructuredAgentRunner(governance, budgets, bindings, provider_settings),
-            worker_id,
-        )
+        if provider_settings.enabled:
+            assert governance is not None and budgets is not None
+            worker.handlers["real_blueprint"] = RealBlueprintHandler(
+                StoryRepository(sessions), tasks, governance,
+                budgets, bindings,
+                provider_settings, worker_id,
+            )
+            worker.handlers[CHAPTER_TASK_TYPE] = RealChapterPipelineHandler(
+                tasks,
+                NovelWorkspaceRepository(sessions),
+                BudgetedStructuredAgentRunner(governance, budgets, bindings, provider_settings),
+                worker_id,
+            )
+        return worker
+
+    workers = [build_worker(index + 1) for index in range(concurrency)]
     if args.loop:
         route = " -> ".join(provider_settings.ordered_providers)
         mode = f"mock + approved agents ({route})" if provider_settings.enabled else "mock only"
-        print(f"Lite worker polling ({mode}); press Ctrl+C to stop", flush=True)
-        try:
-            worker.run_forever(
-                Event(), provider_slots=1, budget_slots=1,
-                poll_seconds=args.poll_seconds,
+        print(f"Lite workers={concurrency} polling ({mode}); press Ctrl+C to stop", flush=True)
+        stop = Event()
+        threads = [
+            Thread(
+                target=worker.run_forever,
+                kwargs={
+                    "stop": stop,
+                    "provider_slots": concurrency,
+                    "budget_slots": concurrency,
+                    "poll_seconds": args.poll_seconds,
+                },
+                name=worker.worker_id,
             )
+            for worker in workers
+        ]
+        try:
+            for thread in threads:
+                thread.start()
+            while any(thread.is_alive() for thread in threads):
+                for thread in threads:
+                    thread.join(timeout=0.5)
         except KeyboardInterrupt:
             print("mock worker stopped", flush=True)
+        finally:
+            stop.set()
+            for thread in threads:
+                thread.join(timeout=max(2.0, args.poll_seconds + 1))
     else:
-        print(worker.run_once(provider_slots=1, budget_slots=1), flush=True)
+        print(workers[0].run_once(provider_slots=1, budget_slots=1), flush=True)
 
 
 if __name__ == "__main__":

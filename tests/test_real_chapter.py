@@ -70,6 +70,18 @@ class SequentialProvider:
     def generate_structured(self, request):
         self.calls += 1
         content = " ".join(["Mara read the letter and faced the truth with Eli."] * 60)
+        if "passed" in request.json_schema.get("properties", {}):
+            return StructuredResult({
+                "title": "The Letter", "content": content,
+                "summary": "Mara confronts Eli about the letter.",
+                "editor_notes": ["Completed internal edit."],
+                "passed": self.qc_passed,
+                "continuity_issues": [] if self.qc_passed else ["The reveal occurs too early."],
+                "unresolved_risks": [],
+                "continuity_notes": ["Mara now distrusts Eli."],
+                "new_open_loops": ["Why was the seal broken?"],
+                "close_open_loops": [],
+            }, ProviderUsage(100, 100, 200))
         if self.calls == 1:
             value = {
                 "title": "The Letter", "content": content,
@@ -95,7 +107,7 @@ class SequentialProvider:
         return StructuredResult(value, ProviderUsage(100, 100, 200))
 
 
-def pipeline(tmp_path, qc_passed: bool, *, auto_continue: bool = False):
+def pipeline(tmp_path, qc_passed: bool, *, auto_continue: bool = False, fast: bool = False):
     sessions = make_session_factory(f"sqlite:///{tmp_path / 'chapter.sqlite3'}")
     initialize_lite_schema(sessions)
     stories = StoryRepository(sessions)
@@ -136,6 +148,7 @@ def pipeline(tmp_path, qc_passed: bool, *, auto_continue: bool = False):
         "gemini", (),
         {"gemini": ProviderModelSettings("gemini", "unused", "gemini-test", None, rate, 6000, 60)},
         {role: route for role in ("chapter_writer", "chapter_editor", "continuity_qc")},
+        chapter_pipeline_mode="fast" if fast else "quality",
     )
     provider = SequentialProvider(qc_passed)
     runner = BudgetedStructuredAgentRunner(
@@ -178,3 +191,17 @@ def test_successful_auto_pipeline_queues_next_chapter_with_new_workspace_version
     assert tasks.get_task_request(UUID(next_result["task_id"])) == {
         "chapter_number": 2, "workspace_version": 2, "auto_continue": True,
     }
+
+
+def test_fast_pipeline_uses_one_provider_call_and_still_requires_qc_pass(tmp_path) -> None:
+    sessions, story_id, task_id, tasks, workspaces, provider, worker = pipeline(
+        tmp_path, True, fast=True,
+    )
+    assert worker.run_once(provider_slots=1, budget_slots=1) == "completed"
+    result = tasks.get_task_result(task_id, story_id, expected_type=CHAPTER_TASK_TYPE)
+    assert result["checkpoint"]["state"] == "saved"
+    assert result["checkpoint"]["pipeline_mode"] == "fast"
+    assert len(NovelWorkspace.model_validate(workspaces.get(story_id)["workspace"]).chapters) == 1
+    assert provider.calls == 1
+    with sessions() as session:
+        assert session.scalar(select(func.count(ProviderCallRow.id))) == 1

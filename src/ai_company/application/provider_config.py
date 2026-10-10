@@ -10,7 +10,9 @@ from ai_company.domain.workflow import DomainError
 from ai_company.providers.base import TokenRateCard
 
 
-SUPPORTED_PROVIDERS = ("openai", "gemini")
+SUPPORTED_PROVIDERS = ("openai",)
+REQUIRED_OPENAI_MODEL = "gpt-5.6-terra"
+REASONING_EFFORTS = frozenset({"none", "low", "medium", "high", "xhigh", "max"})
 ROLE_WORKLOADS = {
     "story_architect": "story_bible",
     "chapter_writer": "chapter_writer",
@@ -38,6 +40,7 @@ class ProviderModelSettings:
     rate_card: TokenRateCard
     max_output_tokens: int
     timeout_seconds: int
+    service_tier: str = "default"
 
 
 @dataclass(frozen=True)
@@ -61,6 +64,8 @@ class StoryAgentSettings:
     fallback_providers: tuple[str, ...]
     providers: dict[str, ProviderModelSettings]
     routes: dict[str, AgentRouteSettings] = field(default_factory=dict)
+    reasoning_efforts: dict[str, str] = field(default_factory=dict)
+    chapter_pipeline_mode: str = "quality"
 
     @property
     def ordered_providers(self) -> tuple[str, ...]:
@@ -79,26 +84,34 @@ class StoryAgentSettings:
             workload, AgentRouteSettings(self.primary_provider, self.fallback_providers),
         )
 
-
-# Backward-compatible import name. The object is now deliberately multi-provider.
-GeminiPrototypeSettings = StoryAgentSettings
+    def reasoning_effort_for(self, workload: str) -> str:
+        return self.reasoning_efforts.get(workload, "low")
 
 
 def _provider_settings(
     values: Mapping[str, str], provider: str, currency: str, *, require_secret: bool,
 ) -> ProviderModelSettings | None:
-    prefix = provider.upper()
+    if provider != "openai":
+        raise DomainError("This release only permits the OpenAI provider.")
+    prefix = "OPENAI"
     api_key = values.get(f"{prefix}_API_KEY", "").strip()
     model = values.get(f"{prefix}_MODEL", "").strip()
     if not api_key and not model:
         return None
     if not model:
         raise DomainError(f"{prefix}_MODEL is required when {prefix}_API_KEY is configured.")
+    if model != REQUIRED_OPENAI_MODEL:
+        raise DomainError(f"OPENAI_MODEL must be {REQUIRED_OPENAI_MODEL} for this release.")
     if require_secret and not api_key:
         raise DomainError(f"{prefix}_API_KEY is required for provider {provider}.")
     rate_version = values.get(f"AI_COMPANY_{prefix}_RATE_CARD_VERSION", "").strip()
     if not rate_version:
         raise DomainError(f"AI_COMPANY_{prefix}_RATE_CARD_VERSION is required.")
+    service_tier = values.get("AI_COMPANY_OPENAI_SERVICE_TIER", "default").strip().lower()
+    if service_tier not in {"auto", "default", "fast", "flex", "priority"}:
+        raise DomainError("AI_COMPANY_OPENAI_SERVICE_TIER is invalid.")
+    if service_tier in {"fast", "priority"} and "fast" not in rate_version.lower():
+        raise DomainError("Fast mode requires a separately approved fast rate card.")
     return ProviderModelSettings(
         provider_key=provider,
         api_key=api_key,
@@ -113,6 +126,7 @@ def _provider_settings(
         ),
         max_output_tokens=_positive_int(values, f"AI_COMPANY_{prefix}_MAX_OUTPUT_TOKENS"),
         timeout_seconds=_positive_int(values, f"AI_COMPANY_{prefix}_TIMEOUT_SECONDS"),
+        service_tier=service_tier,
     )
 
 
@@ -124,7 +138,7 @@ def load_story_agent_settings(
     if enabled_text not in {"true", "false"}:
         raise DomainError("AI_COMPANY_REAL_AI_ENABLED must be true or false.")
     enabled = enabled_text == "true"
-    architect_primary = values.get("AI_COMPANY_STORY_ARCHITECT_PROVIDER", "gemini").strip().lower()
+    architect_primary = values.get("AI_COMPANY_STORY_ARCHITECT_PROVIDER", "openai").strip().lower()
     architect_fallbacks = tuple(
         item.strip().lower()
         for item in values.get("AI_COMPANY_STORY_ARCHITECT_FALLBACKS", "").split(",")
@@ -141,7 +155,7 @@ def load_story_agent_settings(
         ordered = (primary, *fallbacks)
         if len(set(ordered)) != len(ordered) or any(item not in SUPPORTED_PROVIDERS for item in ordered):
             raise DomainError(
-                f"{role.replace('_', ' ').title()} providers must be unique and supported: openai, gemini."
+                f"{role.replace('_', ' ').title()} must use openai with no fallback."
             )
         return workload, AgentRouteSettings(primary, fallbacks)
 
@@ -167,6 +181,22 @@ def load_story_agent_settings(
             if configured is None:
                 raise DomainError(f"Provider {provider} is assigned but has no key/model configuration.")
             providers[provider] = configured
+    reasoning_efforts: dict[str, str] = {}
+    reasoning_defaults = {
+        "story_bible": "low",
+        "chapter_writer": "none",
+        "chapter_editor": "none",
+        "continuity_qc": "low",
+    }
+    for role, workload in ROLE_WORKLOADS.items():
+        key = f"AI_COMPANY_{role.upper()}_REASONING_EFFORT"
+        effort = values.get(key, reasoning_defaults[workload]).strip().lower()
+        if effort not in REASONING_EFFORTS:
+            raise DomainError(f"{key} is invalid.")
+        reasoning_efforts[workload] = effort
+    pipeline_mode = values.get("AI_COMPANY_CHAPTER_PIPELINE_MODE", "fast").strip().lower()
+    if pipeline_mode not in {"fast", "quality"}:
+        raise DomainError("AI_COMPANY_CHAPTER_PIPELINE_MODE must be fast or quality.")
     return StoryAgentSettings(
         enabled=enabled,
         policy_version=required["AI_COMPANY_POLICY_VERSION"],
@@ -177,11 +207,6 @@ def load_story_agent_settings(
         fallback_providers=architect.fallback_providers,
         providers=providers,
         routes=routes,
+        reasoning_efforts=reasoning_efforts,
+        chapter_pipeline_mode=pipeline_mode,
     )
-
-
-def load_gemini_prototype_settings(
-    environment: Mapping[str, str] | None = None, *, require_secret: bool = True,
-) -> StoryAgentSettings:
-    """Backward-compatible loader name for the multi-provider story agent."""
-    return load_story_agent_settings(environment, require_secret=require_secret)
