@@ -14,7 +14,8 @@ from ai_company.adapters.database import (
     StoryRepository,
     TaskRepository,
 )
-from ai_company.application.provider_config import GeminiPrototypeSettings
+from ai_company.application.provider_config import StoryAgentSettings
+from ai_company.application.provider_factory import ProviderBinding
 from ai_company.domain.policy import (
     AssignmentSnapshot,
     DataCategory,
@@ -24,7 +25,7 @@ from ai_company.domain.policy import (
     route_model,
 )
 from ai_company.domain.workflow import DomainError
-from ai_company.providers.base import ProviderFailure, StructuredRequest, StructuredTextProvider
+from ai_company.providers.base import ProviderFailure, StructuredRequest
 
 
 WORKLOAD = "story_bible"
@@ -146,33 +147,46 @@ def _prompt(premise: str) -> str:
 
 
 def _approved_route(
-    governance: GovernanceRepository, settings: GeminiPrototypeSettings,
-) -> None:
+    governance: GovernanceRepository,
+    settings: StoryAgentSettings,
+    unavailable_providers: frozenset[str],
+):
     policy, assignments = governance.approved_context(
         settings.policy_version, settings.assignment_version,
     )
-    provider_data = policy.get("provider_permissions", {}).get("gemini", {})
-    categories = frozenset(DataCategory(item) for item in provider_data.get("allowed_categories", []))
-    permission = ProviderPermission(
-        "gemini", bool(provider_data.get("approved")), categories,
-        prototype_only=bool(provider_data.get("prototype_only", True)),
-    )
-    assert_cloud_boundary(
-        permission, frozenset({DataCategory.SYNTHETIC_PROMPT, DataCategory.STORY_TEXT}), prototype=True,
-    )
-    primary = assignments.get(WORKLOAD, {}).get("primary", {})
-    choice = ModelChoice(
-        str(primary.get("provider", "")), str(primary.get("model", "")),
-        frozenset(primary.get("capabilities", [])), bool(primary.get("approved")),
-    )
+    workload = assignments.get(WORKLOAD, {})
+
+    def choice(document: dict) -> ModelChoice:
+        return ModelChoice(
+            str(document.get("provider", "")), str(document.get("model", "")),
+            frozenset(document.get("capabilities", [])), bool(document.get("approved")),
+        )
+
     routed = route_model(
         AssignmentSnapshot(
-            settings.assignment_version, WORKLOAD, choice, activated_by_user=True,
+            settings.assignment_version,
+            WORKLOAD,
+            choice(workload.get("primary", {})),
+            tuple(choice(item) for item in workload.get("fallbacks", [])),
+            activated_by_user=True,
         ),
         frozenset({"text", "structured_output"}),
+        unavailable_providers,
     )
-    if routed.choice.provider != "gemini" or routed.choice.model != settings.model:
-        raise DomainError("Configured Gemini model does not match the active assignment snapshot.")
+    binding = settings.providers.get(routed.choice.provider)
+    if binding is None or routed.choice.model != binding.model:
+        raise DomainError("Configured provider/model does not match the active assignment snapshot.")
+    provider_data = policy.get("provider_permissions", {}).get(routed.choice.provider, {})
+    categories = frozenset(DataCategory(item) for item in provider_data.get("allowed_categories", []))
+    assert_cloud_boundary(
+        ProviderPermission(
+            routed.choice.provider, bool(provider_data.get("approved")), categories,
+            prototype_only=bool(provider_data.get("prototype_only", True)),
+        ),
+        frozenset({DataCategory.SYNTHETIC_PROMPT, DataCategory.STORY_TEXT}),
+        prototype=True,
+    )
+    return routed
 
 
 class RealBlueprintHandler:
@@ -182,94 +196,100 @@ class RealBlueprintHandler:
         tasks: TaskRepository,
         governance: GovernanceRepository,
         budgets: BudgetRepository,
-        provider: StructuredTextProvider,
-        settings: GeminiPrototypeSettings,
+        providers: dict[str, ProviderBinding],
+        settings: StoryAgentSettings,
         worker_id: str,
     ) -> None:
         self.stories = stories
         self.tasks = tasks
         self.governance = governance
         self.budgets = budgets
-        self.provider = provider
+        self.providers = providers
         self.settings = settings
         self.worker_id = worker_id
 
     def __call__(self, task_id: UUID) -> dict:
-        _approved_route(self.governance, self.settings)
         story_id = self.tasks.get_task_story_id(task_id)
         attempt_id = self.tasks.get_active_attempt_id(task_id, self.worker_id)
         prompt = _prompt(self.stories.get_story_idea(story_id))
         schema_bytes = json.dumps(REAL_BLUEPRINT_SCHEMA, separators=(",", ":")).encode("utf-8")
         input_upper_bound = len(prompt.encode("utf-8")) + len(schema_bytes) + 2048
-        estimate = self.settings.rate_card.upper_bound(
-            input_upper_bound, self.settings.max_output_tokens,
-        )
-        now = datetime.now(timezone.utc)
-        reservation_id = self.budgets.reserve(
-            self.settings.budget_version, attempt_id, WORKLOAD, estimate, now,
-        )
-        try:
-            call_id = self.governance.start_provider_call(
-                task_attempt_id=attempt_id,
-                policy_version=self.settings.policy_version,
-                assignment_version=self.settings.assignment_version,
-                provider_key=self.provider.provider_key,
-                model_key=self.provider.model_key,
-                workload=WORKLOAD,
-                requested_at=now,
-                estimated_minor=estimate,
-                currency=self.settings.rate_card.currency,
-                rate_card_version=self.settings.rate_card.version,
-                budget_decision_id=reservation_id,
+        unavailable: set[str] = set()
+        last_failure: ProviderFailure | None = None
+        while len(unavailable) < len(self.providers):
+            routed = _approved_route(self.governance, self.settings, frozenset(unavailable))
+            binding = self.providers.get(routed.choice.provider)
+            if binding is None:
+                raise DomainError("Approved provider is not loaded in this worker.")
+            estimate = binding.rate_card.upper_bound(input_upper_bound, binding.max_output_tokens)
+            now = datetime.now(timezone.utc)
+            reservation_id = self.budgets.reserve(
+                self.settings.budget_version, attempt_id, WORKLOAD, estimate, now,
             )
-        except Exception:
-            self.budgets.release(reservation_id, datetime.now(timezone.utc))
-            raise
-        try:
-            result = self.provider.generate_structured(StructuredRequest(
-                prompt=prompt,
-                json_schema=REAL_BLUEPRINT_SCHEMA,
-                max_output_tokens=self.settings.max_output_tokens,
-            ))
-            blueprint = RealBlueprint.model_validate(result.value)
-            actual = self.settings.rate_card.actual(result.usage)
-            if actual > estimate:
-                raise ProviderFailure("cost_exceeded_reservation", retryable=False)
-        except ProviderFailure as exc:
+            try:
+                call_id = self.governance.start_provider_call(
+                    task_attempt_id=attempt_id,
+                    policy_version=self.settings.policy_version,
+                    assignment_version=self.settings.assignment_version,
+                    provider_key=binding.provider.provider_key,
+                    model_key=binding.provider.model_key,
+                    workload=WORKLOAD,
+                    requested_at=now,
+                    estimated_minor=estimate,
+                    currency=binding.rate_card.currency,
+                    rate_card_version=binding.rate_card.version,
+                    used_fallback=routed.used_fallback,
+                    route_reason=routed.reason,
+                    budget_decision_id=reservation_id,
+                )
+            except Exception:
+                self.budgets.release(reservation_id, datetime.now(timezone.utc))
+                raise
+            try:
+                result = binding.provider.generate_structured(StructuredRequest(
+                    prompt=prompt, json_schema=REAL_BLUEPRINT_SCHEMA,
+                    max_output_tokens=binding.max_output_tokens,
+                ))
+                blueprint = RealBlueprint.model_validate(result.value)
+                actual = binding.rate_card.actual(result.usage)
+                if actual > estimate:
+                    raise ProviderFailure("cost_exceeded_reservation", retryable=False)
+            except ValidationError as exc:
+                failure = ProviderFailure("invalid_structured_output", retryable=False)
+                failure.__cause__ = exc
+            except ProviderFailure as exc:
+                failure = exc
+            except Exception as exc:
+                failure = ProviderFailure("provider_handler_error", retryable=False)
+                failure.__cause__ = exc
+            else:
+                finished = datetime.now(timezone.utc)
+                self.governance.finish_provider_call(
+                    call_id, completed_at=finished,
+                    usage=result.usage.as_ledger_document(), actual_minor=actual,
+                )
+                self.budgets.settle(reservation_id, actual, finished)
+                break
             finished = datetime.now(timezone.utc)
             self.governance.finish_provider_call(
-                call_id, completed_at=finished, usage={}, actual_minor=None, error_code=exc.code,
+                call_id, completed_at=finished, usage={}, actual_minor=None, error_code=failure.code,
             )
             self.budgets.settle(reservation_id, estimate, finished)
-            raise
-        except ValidationError as exc:
-            finished = datetime.now(timezone.utc)
-            self.governance.finish_provider_call(
-                call_id, completed_at=finished, usage={}, actual_minor=None,
-                error_code="invalid_structured_output",
-            )
-            self.budgets.settle(reservation_id, estimate, finished)
-            raise ProviderFailure("invalid_structured_output", retryable=False) from exc
-        except Exception as exc:
-            finished = datetime.now(timezone.utc)
-            self.governance.finish_provider_call(
-                call_id, completed_at=finished, usage={}, actual_minor=None,
-                error_code="provider_handler_error",
-            )
-            self.budgets.settle(reservation_id, estimate, finished)
-            raise ProviderFailure("provider_handler_error", retryable=False) from exc
-        finished = datetime.now(timezone.utc)
-        self.governance.finish_provider_call(
-            call_id, completed_at=finished,
-            usage=result.usage.as_ledger_document(), actual_minor=actual,
-        )
-        self.budgets.settle(reservation_id, actual, finished)
+            last_failure = failure
+            if not failure.retryable:
+                raise failure
+            unavailable.add(routed.choice.provider)
+        else:
+            raise last_failure or ProviderFailure("no_provider_available", retryable=True)
         return {
             "kind": "story_blueprint", "schema_version": 1, "is_mock": False,
             **blueprint.model_dump(),
             "audit": {
                 "provider_call_id": str(call_id),
                 "budget_reservation_id": str(reservation_id),
+                "provider": binding.provider.provider_key,
+                "model": binding.provider.model_key,
+                "used_fallback": routed.used_fallback,
                 "assignment_version": self.settings.assignment_version,
                 "policy_version": self.settings.policy_version,
             },

@@ -38,6 +38,25 @@ def test_real_provider_configuration_is_fail_closed(tmp_path: Path) -> None:
     assert settings.rate_card.upper_bound(10_000, 2_000) == 2
 
 
+def test_story_agent_can_assign_openai_primary_with_gemini_fallback(tmp_path: Path) -> None:
+    environment = configured_environment(tmp_path) | {
+        "AI_COMPANY_STORY_ARCHITECT_PROVIDER": "openai",
+        "AI_COMPANY_STORY_ARCHITECT_FALLBACKS": "gemini",
+        "OPENAI_API_KEY": "local-openai-test-key",
+        "OPENAI_MODEL": "gpt-test-model",
+        "OPENAI_BASE_URL": "https://api.openai.com/v1",
+        "AI_COMPANY_OPENAI_RATE_CARD_VERSION": "openai-rate-v1",
+        "AI_COMPANY_OPENAI_INPUT_MINOR_PER_MILLION": "100",
+        "AI_COMPANY_OPENAI_OUTPUT_MINOR_PER_MILLION": "500",
+        "AI_COMPANY_OPENAI_MAX_OUTPUT_TOKENS": "6000",
+        "AI_COMPANY_OPENAI_TIMEOUT_SECONDS": "60",
+    }
+    settings = load_gemini_prototype_settings(environment)
+    assert settings.ordered_providers == ("openai", "gemini")
+    assert settings.providers["openai"].model == "gpt-test-model"
+    assert settings.providers["gemini"].model == "gemini-test-model"
+
+
 def test_local_env_loads_only_allowlisted_settings_without_overrides(tmp_path: Path, monkeypatch) -> None:
     path = tmp_path / ".env"
     path.write_text("GEMINI_MODEL=from-file\nAI_COMPANY_REAL_AI_ENABLED=true\n", encoding="utf-8")

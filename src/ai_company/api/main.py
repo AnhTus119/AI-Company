@@ -16,7 +16,7 @@ from ai_company.adapters.database import TaskRepository, StoryRepository, initia
 from ai_company.application.mock_chapters import mock_blueprint_key, mock_chapters_key
 from ai_company.application.mock_export import verified_mock_artifact
 from ai_company.application.mock_package import mock_package_key
-from ai_company.application.provider_config import load_gemini_prototype_settings
+from ai_company.application.provider_config import load_story_agent_settings
 from ai_company.application.real_blueprint import real_blueprint_key
 from ai_company.application.runtime import RuntimeProfile, load_runtime_settings
 from ai_company.domain.workflow import DomainError, SourceType, StorySnapshot
@@ -143,7 +143,7 @@ def create_app(
     @app.post("/stories/{story_id}/real-blueprint", status_code=202)
     def queue_real_blueprint(story_id: UUID) -> dict:
         try:
-            provider_settings = load_gemini_prototype_settings()
+            provider_settings = load_story_agent_settings()
             if not provider_settings.enabled:
                 raise DomainError("Real AI is disabled; complete the local provider setup first.")
             story = repository.get_story(story_id)

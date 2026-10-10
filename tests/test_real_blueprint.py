@@ -8,7 +8,8 @@ from ai_company.adapters.database import (
     StoryRepository, TaskRepository, initialize_lite_schema, make_session_factory,
 )
 from ai_company.application.capacity import ResourceSnapshot
-from ai_company.application.provider_config import GeminiPrototypeSettings
+from ai_company.application.provider_config import ProviderModelSettings, StoryAgentSettings
+from ai_company.application.provider_factory import ProviderBinding
 from ai_company.application.real_blueprint import RealBlueprintHandler, real_blueprint_key
 from ai_company.application.runtime import load_runtime_settings
 from ai_company.domain.workflow import SourceType
@@ -77,16 +78,21 @@ def test_real_blueprint_requires_approved_route_and_budget_then_audits_call(tmp_
     budgets = BudgetRepository(sessions)
     budgets.create_policy("budget-real-v1", "USD", 100, "Asia/Ho_Chi_Minh")
     budgets.activate_policy("budget-real-v1", "owner", now)
-    settings = GeminiPrototypeSettings(
-        enabled=True, api_key="unused", model="gemini-test-model",
+    rate_card = TokenRateCard("test-rate", "USD", 75, 375)
+    settings = StoryAgentSettings(
+        enabled=True,
         policy_version="policy-real-v1", assignment_version="models-real-v1",
         budget_version="budget-real-v1", daily_budget_minor=100,
-        rate_card=TokenRateCard("test-rate", "USD", 75, 375),
-        max_output_tokens=6000, timeout_seconds=60,
+        primary_provider="gemini", fallback_providers=(),
+        providers={"gemini": ProviderModelSettings(
+            "gemini", "unused", "gemini-test-model", None, rate_card, 6000, 60,
+        )},
     )
     worker_id = "real-test-worker"
     handler = RealBlueprintHandler(
-        stories, tasks, governance, budgets, FakeStructuredProvider(), settings, worker_id,
+        stories, tasks, governance, budgets,
+        {"gemini": ProviderBinding(FakeStructuredProvider(), rate_card, 6000)},
+        settings, worker_id,
     )
     worker = LiteWorker(
         tasks, {"real_blueprint": handler}, worker_id,

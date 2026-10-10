@@ -88,10 +88,10 @@ def main() -> int:
     print(f"Python dang dung: {sys.executable}", flush=True)
     ensure_dependencies()
     if args.check:
-        from ai_company.application.provider_config import load_gemini_prototype_settings
-        provider = load_gemini_prototype_settings()
+        from ai_company.application.provider_config import load_story_agent_settings
+        provider = load_story_agent_settings()
         if provider.enabled:
-            print(f"Thu vien Lite va cau hinh Gemini {provider.model} da san sang.", flush=True)
+            print("Thu vien Lite va route agent " + " -> ".join(provider.ordered_providers) + " da san sang.", flush=True)
         else:
             print("Thu vien Lite da san sang. AI that dang tat; mock khong can API key.", flush=True)
         return 0

@@ -13,8 +13,9 @@ Hướng Vercel/Render đã **hủy**. Đây là web **chạy trên từng máy*
 - Quy tắc vòng đời story, 20 chương tuần tự, các gate bắt buộc và điều kiện ghi nhận `production_ready`.
 - Kiểm soát nhận việc theo mục tiêu ngày, hàng chờ duyệt, khả năng xử lý an toàn và ngân sách.
 - Quy tắc Cloud Boundary và chọn provider/fallback theo assignment đã duyệt.
-- Bản ghi policy/model-assignment bất biến cùng sổ provider/cost gắn với task attempt; chưa có provider thật nhưng nền audit và chặn gọi khi chưa duyệt đã sẵn sàng.
-- Adapter Gemini prototype bị tắt mặc định có thể tạo một Story Bible thật, kế hoạch 20 chương và Hook Contract sau khi chủ dự án tự thêm key, model, rate card, budget và chạy bước phê duyệt local. Xem [hướng dẫn Gemini](docs/GEMINI_PROTOTYPE_SETUP.md).
+- Bản ghi policy/model-assignment bất biến cùng sổ provider/cost gắn với task attempt; mọi provider thật bị chặn cho đến khi route và ngân sách được duyệt.
+- Vai `story_architect` hỗ trợ OpenAI Responses API hoặc Gemini làm primary/fallback. Mỗi lần thử giữ ngân sách riêng, ghi provider/model/fallback và chỉ fallback cho lỗi có thể thử lại. Nó tạo Story Bible thật, kế hoạch 20 chương và Hook Contract; chưa viết thân 20 chương.
+- Cầu nối MuMuAINovel có thể xuất hoặc push real blueprint sang project import v1.1.0 của một instance local. MuMu là workspace tiểu thuyết riêng, không phải model provider và chi phí model phát sinh bên trong MuMu không thuộc budget ledger của AI Company. Xem [hướng dẫn agent và MuMuAINovel](docs/AI_AGENTS_AND_MUMU_SETUP.md).
 - Hai profile dùng chung logic: `lite` dùng SQLite cục bộ trên máy 4 GB; `standard` dành cho PostgreSQL/RabbitMQ khi máy có đủ tài nguyên.
 - Các bảng đầu tiên cùng migration PostgreSQL, repository và API tạo campaign/story nháp, xem story, duyệt story đã sẵn sàng.
 - Task bền vững với idempotency key, lease, checkpoint và trạng thái chờ xác nhận sau gián đoạn; đã có lõi worker Lite thăm dò database, nhưng chưa nối thành tiến trình vận hành với các handler sản xuất story.

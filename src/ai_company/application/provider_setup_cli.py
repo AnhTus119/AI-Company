@@ -1,4 +1,4 @@
-"""One-time explicit approval bootstrap for the bounded Gemini prototype."""
+"""One-time explicit approval bootstrap for configured story agents."""
 
 from __future__ import annotations
 
@@ -13,12 +13,12 @@ from ai_company.adapters.database import (
     make_session_factory,
 )
 from ai_company.application.local_env import load_local_env
-from ai_company.application.provider_config import load_gemini_prototype_settings
+from ai_company.application.provider_config import load_story_agent_settings
 from ai_company.application.runtime import RuntimeProfile, load_runtime_settings
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Approve local Gemini prototype configuration")
+    parser = argparse.ArgumentParser(description="Approve local story-agent provider configuration")
     parser.add_argument("--approve", action="store_true", help="Create and activate immutable local snapshots")
     parser.add_argument("--approved-by", default="local-owner")
     args = parser.parse_args()
@@ -26,7 +26,7 @@ def main() -> None:
         parser.error("Review .env, then rerun with --approve to record explicit approval.")
     root = Path(__file__).resolve().parents[3]
     load_local_env(root / ".env")
-    settings = load_gemini_prototype_settings()
+    settings = load_story_agent_settings()
     if not settings.enabled:
         parser.error("Set AI_COMPANY_REAL_AI_ENABLED=true in .env first.")
     runtime = load_runtime_settings()
@@ -40,34 +40,42 @@ def main() -> None:
     now = datetime.now(timezone.utc)
     governance.create_policy_version(settings.policy_version, {
         "provider_permissions": {
-            "gemini": {
+            provider: {
                 "approved": True,
                 "prototype_only": True,
                 "allowed_categories": ["synthetic_prompt", "story_text"],
             }
+            for provider in settings.ordered_providers
         }
     })
     governance.approve_policy_version(settings.policy_version, args.approved_by, now)
-    governance.create_assignment_version(settings.assignment_version, {
-        "story_bible": {
-            "primary": {
-                "provider": "gemini",
-                "model": settings.model,
+    def assignment(provider: str) -> dict:
+        return {
+                "provider": provider,
+                "model": settings.providers[provider].model,
                 "capabilities": ["text", "structured_output"],
                 "approved": True,
-            }
+        }
+
+    governance.create_assignment_version(settings.assignment_version, {
+        "story_bible": {
+            "primary": assignment(settings.primary_provider),
+            "fallbacks": [assignment(provider) for provider in settings.fallback_providers],
         }
     })
     governance.activate_assignment_version(settings.assignment_version, args.approved_by, now)
     budgets.create_policy(
-        settings.budget_version, settings.rate_card.currency,
+        settings.budget_version, next(iter(settings.providers.values())).rate_card.currency,
         settings.daily_budget_minor, "Asia/Ho_Chi_Minh",
     )
     budgets.activate_policy(settings.budget_version, args.approved_by, now)
-    print("Approved local Gemini prototype snapshots and daily budget.")
-    print(f"Model: {settings.model}")
-    print(f"Daily cap: {settings.daily_budget_minor} {settings.rate_card.currency} minor units")
-    print("The API key was read from .env and was not stored in the database.")
+    print("Approved local story-agent snapshots and daily budget.")
+    print("Route: " + " -> ".join(
+        f"{provider}/{settings.providers[provider].model}" for provider in settings.ordered_providers
+    ))
+    currency = next(iter(settings.providers.values())).rate_card.currency
+    print(f"Daily cap: {settings.daily_budget_minor} {currency} minor units")
+    print("API keys were read from .env and were not stored in the database.")
 
 
 if __name__ == "__main__":
