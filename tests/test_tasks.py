@@ -40,6 +40,31 @@ def test_idempotency_key_cannot_cross_task_type(repositories) -> None:
         tasks.create_task(story_id, "mock_chapters", "shared-key", now)
 
 
+def test_task_request_payload_is_durable_and_part_of_idempotency(repositories) -> None:
+    tasks, story_id = repositories
+    now = datetime.now(timezone.utc)
+    request = {"chapter_number": 1, "workspace_version": 2}
+    task_id = tasks.create_task(
+        story_id, "real_chapter_pipeline", "real-chapter:1", now,
+        request_payload=request,
+    )
+    assert tasks.get_task_request(task_id) == request
+    assert tasks.create_task(
+        story_id, "real_chapter_pipeline", "real-chapter:1", now,
+        request_payload=request,
+    ) == task_id
+    with pytest.raises(DomainError, match="already used"):
+        tasks.create_task(
+            story_id, "real_chapter_pipeline", "real-chapter:1", now,
+            request_payload={"chapter_number": 2, "workspace_version": 2},
+        )
+    with pytest.raises(DomainError, match="credentials"):
+        tasks.create_task(
+            story_id, "real_chapter_pipeline", "unsafe-request", now,
+            request_payload={"api_key": "never-store-this"},
+        )
+
+
 def test_restart_holds_expired_task_for_human_confirmation(repositories) -> None:
     tasks, story_id = repositories
     now = datetime.now(timezone.utc)

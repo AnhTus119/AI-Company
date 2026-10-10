@@ -45,7 +45,7 @@ def main() -> None:
                 "prototype_only": True,
                 "allowed_categories": ["synthetic_prompt", "story_text"],
             }
-            for provider in settings.ordered_providers
+            for provider in settings.providers
         }
     })
     governance.approve_policy_version(settings.policy_version, args.approved_by, now)
@@ -58,10 +58,11 @@ def main() -> None:
         }
 
     governance.create_assignment_version(settings.assignment_version, {
-        "story_bible": {
-            "primary": assignment(settings.primary_provider),
-            "fallbacks": [assignment(provider) for provider in settings.fallback_providers],
+        workload: {
+            "primary": assignment(route.primary_provider),
+            "fallbacks": [assignment(provider) for provider in route.fallback_providers],
         }
+        for workload, route in settings.routes.items()
     })
     governance.activate_assignment_version(settings.assignment_version, args.approved_by, now)
     budgets.create_policy(
@@ -70,9 +71,10 @@ def main() -> None:
     )
     budgets.activate_policy(settings.budget_version, args.approved_by, now)
     print("Approved local story-agent snapshots and daily budget.")
-    print("Route: " + " -> ".join(
-        f"{provider}/{settings.providers[provider].model}" for provider in settings.ordered_providers
-    ))
+    for workload, route in settings.routes.items():
+        print(f"Route {workload}: " + " -> ".join(
+            f"{provider}/{settings.providers[provider].model}" for provider in route.ordered_providers
+        ))
     currency = next(iter(settings.providers.values())).rate_card.currency
     print(f"Daily cap: {settings.daily_budget_minor} {currency} minor units")
     print("API keys were read from .env and were not stored in the database.")

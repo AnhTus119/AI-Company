@@ -50,7 +50,7 @@ class Base(DeclarativeBase):
 
 
 JSON_DOCUMENT = JSON().with_variant(JSONB(), "postgresql")
-LITE_SCHEMA_VERSION = 4
+LITE_SCHEMA_VERSION = 5
 
 
 def utcnow() -> datetime:
@@ -168,6 +168,7 @@ class TaskRow(Base):
     attempt_no: Mapped[int] = mapped_column(Integer, default=0)
     lease_owner: Mapped[str | None] = mapped_column(String(200), nullable=True)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    request_payload: Mapped[dict | None] = mapped_column(JSON_DOCUMENT, nullable=True)
     checkpoint: Mapped[dict | None] = mapped_column(JSON_DOCUMENT, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -362,6 +363,15 @@ def initialize_lite_schema(sessions: sessionmaker[Session]) -> None:
     if version == 3:
         NovelWorkspaceRow.__table__.create(engine, checkfirst=True)
         with engine.begin() as connection:
+            connection.exec_driver_sql("PRAGMA user_version=4")
+        version = 4
+    if version == 4:
+        with engine.begin() as connection:
+            task_columns = {
+                row[1] for row in connection.exec_driver_sql("PRAGMA table_info(tasks)").all()
+            }
+            if "request_payload" not in task_columns:
+                connection.exec_driver_sql("ALTER TABLE tasks ADD COLUMN request_payload JSON")
             connection.exec_driver_sql(f"PRAGMA user_version={LITE_SCHEMA_VERSION}")
         version = LITE_SCHEMA_VERSION
     if version != LITE_SCHEMA_VERSION:
@@ -616,14 +626,19 @@ class TaskRepository:
         idempotency_key: str,
         eligible_at: datetime,
         attempt_limit: int = 1,
+        request_payload: dict | None = None,
     ) -> UUID:
         if eligible_at.tzinfo is None or attempt_limit <= 0 or not idempotency_key.strip():
             raise DomainError("A task needs a timezone, idempotency key, and positive attempt limit.")
+        if request_payload is not None:
+            if not isinstance(request_payload, dict):
+                raise DomainError("Task request payload must be an object.")
+            _assert_safe_ledger_document(request_payload)
         try:
             with self.sessions.begin() as session:
                 existing = session.scalar(select(TaskRow).where(TaskRow.idempotency_key == idempotency_key))
                 if existing is not None:
-                    return self._same_task_or_error(existing, story_id, task_type)
+                    return self._same_task_or_error(existing, story_id, task_type, request_payload)
                 if session.get(StoryRow, story_id) is None:
                     raise DomainError("Story does not exist.")
                 task = TaskRow(
@@ -632,6 +647,7 @@ class TaskRepository:
                     idempotency_key=idempotency_key,
                     eligible_at=eligible_at.astimezone(timezone.utc),
                     attempt_limit=attempt_limit,
+                    request_payload=request_payload,
                 )
                 session.add(task)
                 session.flush()
@@ -642,11 +658,17 @@ class TaskRepository:
                 existing = session.scalar(select(TaskRow).where(TaskRow.idempotency_key == idempotency_key))
                 if existing is None:
                     raise
-                return self._same_task_or_error(existing, story_id, task_type)
+                return self._same_task_or_error(existing, story_id, task_type, request_payload)
 
     @staticmethod
-    def _same_task_or_error(task: TaskRow, story_id: UUID, task_type: str) -> UUID:
-        if task.story_id != story_id or task.task_type != task_type:
+    def _same_task_or_error(
+        task: TaskRow, story_id: UUID, task_type: str, request_payload: dict | None,
+    ) -> UUID:
+        if (
+            task.story_id != story_id
+            or task.task_type != task_type
+            or task.request_payload != request_payload
+        ):
             raise DomainError("An idempotency key is already used by another task.")
         return task.id
 
@@ -754,6 +776,13 @@ class TaskRepository:
                 raise DomainError("Task does not exist.")
             return story_id
 
+    def get_task_request(self, task_id: UUID) -> dict:
+        with self.sessions() as session:
+            task = session.get(TaskRow, task_id)
+            if task is None:
+                raise DomainError("Task does not exist.")
+            return dict(task.request_payload or {})
+
     def get_task_created_at(self, task_id: UUID) -> datetime:
         with self.sessions() as session:
             created_at = session.scalar(select(TaskRow.created_at).where(TaskRow.id == task_id))
@@ -777,11 +806,14 @@ class TaskRepository:
     def list_mock_task_statuses(self, story_ids: tuple[UUID, ...]) -> dict[str, dict]:
         if not story_ids:
             return {}
-        task_types = ("mock_blueprint", "mock_chapters", "mock_package", "real_blueprint")
+        task_types = (
+            "mock_blueprint", "mock_chapters", "mock_package", "real_blueprint",
+            "real_chapter_pipeline",
+        )
         with self.sessions() as session:
             rows = session.scalars(select(TaskRow).where(
                 TaskRow.story_id.in_(story_ids), TaskRow.task_type.in_(task_types),
-            )).all()
+            ).order_by(TaskRow.created_at)).all()
             result: dict[str, dict] = {}
             for row in rows:
                 status = {
@@ -794,6 +826,10 @@ class TaskRepository:
                 }
                 if row.task_type == "real_blueprint" and row.status == "completed" and row.checkpoint:
                     status["title"] = row.checkpoint.get("title")
+                if row.task_type == "real_chapter_pipeline":
+                    status["chapter_number"] = (row.request_payload or {}).get("chapter_number")
+                    if row.status == "completed" and row.checkpoint:
+                        status["state"] = row.checkpoint.get("state")
                 result.setdefault(str(row.story_id), {})[row.task_type] = status
             return result
 

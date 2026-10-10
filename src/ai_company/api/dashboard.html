@@ -62,7 +62,7 @@
     const message = document.getElementById('message');
     const labels = {queued:'Đang chờ worker', running:'Đang xử lý', completed:'Hoàn tất',
       technical_failure:'Lỗi kỹ thuật', awaiting_recovery_confirmation:'Cần xác nhận khôi phục'};
-    const names = [['real_blueprint','Dàn ý AI thật'], ['mock_blueprint','Dàn ý mock'], ['mock_chapters','20 chương mock'], ['mock_package','Gói 5 tệp mock']];
+    const names = [['real_blueprint','Dàn ý AI thật'], ['real_chapter_pipeline','Chương AI thật'], ['mock_blueprint','Dàn ý mock'], ['mock_chapters','20 chương mock'], ['mock_package','Gói 5 tệp mock']];
     function element(tag, className, value) {
       const node = document.createElement(tag);
       if (className) node.className = className;
@@ -107,6 +107,13 @@
       if (!tasks.real_blueprint) buttons.push(actionButton('Tạo dàn ý AI thật (dùng quota/chi phí)', `/stories/${story.id}/real-blueprint`));
       if (tasks.real_blueprint?.status === 'completed' && !story.novel_workspace)
         buttons.push(actionButton('Tạo Novel Workspace local', `/stories/${story.id}/novel-workspace`));
+      const chapterTask = tasks.real_chapter_pipeline;
+      if (story.novel_workspace && story.novel_workspace.chapter_count < 20 &&
+          (!chapterTask || (chapterTask.status === 'completed' && chapterTask.state === 'saved'))) {
+        const nextChapter = story.novel_workspace.chapter_count + 1;
+        buttons.push(actionButton(`Viết + biên tập + QC chương ${nextChapter} (dùng quota/chi phí)`,
+          `/stories/${story.id}/novel-workspace/chapters/${nextChapter}/generate`));
+      }
       let button;
       if (!tasks.mock_blueprint) button = actionButton('Tạo dàn ý mock', `/stories/${story.id}/mock-blueprint`);
       else if (tasks.mock_blueprint.status === 'completed' && !tasks.mock_chapters)
@@ -122,6 +129,10 @@
       }
       if (story.novel_workspace) {
         node.append(element('div','path',`Novel Workspace local · ${story.novel_workspace.chapter_count}/20 chương · version ${story.novel_workspace.row_version} · không cần đăng nhập`));
+      }
+      if (chapterTask) {
+        const state = chapterTask.state ? ` · kết quả ${chapterTask.state}` : '';
+        node.append(element('div','path',`Chương AI ${chapterTask.chapter_number || ''}: ${labels[chapterTask.status] || chapterTask.status}${state}. Task: ${chapterTask.task_id}`));
       }
       if (tasks.mock_package?.directory) {
         const packageTask = tasks.mock_package;

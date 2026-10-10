@@ -89,10 +89,10 @@ def test_lite_schema_three_upgrades_to_native_workspace_table(tmp_path) -> None:
     initialize_lite_schema(sessions)
     assert "novel_workspaces" in inspect(sessions.kw["bind"]).get_table_names()
     with sessions.kw["bind"].connect() as connection:
-        assert connection.exec_driver_sql("PRAGMA user_version").scalar() == 4
+        assert connection.exec_driver_sql("PRAGMA user_version").scalar() == 5
 
 
-def test_local_api_materializes_workspace_without_login(tmp_path) -> None:
+def test_local_api_materializes_workspace_without_login(tmp_path, monkeypatch) -> None:
     sessions, stories, story_id = make_story(tmp_path)
     tasks = TaskRepository(sessions)
     now = datetime.now(timezone.utc)
@@ -115,3 +115,27 @@ def test_local_api_materializes_workspace_without_login(tmp_path) -> None:
     ))
     assert saved["row_version"] == 2
     assert saved["workspace"]["chapters"][0]["chapter_number"] == 1
+
+    provider_environment = {
+        "AI_COMPANY_REAL_AI_ENABLED": "true",
+        "GEMINI_API_KEY": "local-test-key",
+        "GEMINI_MODEL": "gemini-test",
+        "AI_COMPANY_POLICY_VERSION": "policy-v1",
+        "AI_COMPANY_ASSIGNMENT_VERSION": "models-v1",
+        "AI_COMPANY_BUDGET_VERSION": "budget-v1",
+        "AI_COMPANY_DAILY_BUDGET_MINOR": "100",
+        "AI_COMPANY_BUDGET_CURRENCY": "USD",
+        "AI_COMPANY_GEMINI_RATE_CARD_VERSION": "rate-v1",
+        "AI_COMPANY_GEMINI_INPUT_MINOR_PER_MILLION": "100",
+        "AI_COMPANY_GEMINI_OUTPUT_MINOR_PER_MILLION": "500",
+        "AI_COMPANY_GEMINI_MAX_OUTPUT_TOKENS": "6000",
+        "AI_COMPANY_GEMINI_TIMEOUT_SECONDS": "60",
+    }
+    for key, value in provider_environment.items():
+        monkeypatch.setenv(key, value)
+    queued = endpoint(
+        "/stories/{story_id}/novel-workspace/chapters/{chapter_number}/generate", "POST",
+    )(story_id, 1)
+    assert queued["status"] == "queued" and queued["chapter_number"] == 1
+    request = tasks.get_task_request(UUID(queued["task_id"]))
+    assert request == {"chapter_number": 1, "workspace_version": 2}

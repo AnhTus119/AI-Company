@@ -9,12 +9,14 @@ from pathlib import Path
 from threading import Event
 
 from ai_company.adapters.database import (
-    BudgetRepository, GovernanceRepository, StoryRepository, TaskRepository,
+    BudgetRepository, GovernanceRepository, NovelWorkspaceRepository, StoryRepository, TaskRepository,
     initialize_lite_schema, make_session_factory,
 )
+from ai_company.application.agent_runner import BudgetedStructuredAgentRunner
 from ai_company.application.provider_config import load_story_agent_settings
 from ai_company.application.provider_factory import build_provider_bindings
 from ai_company.application.real_blueprint import RealBlueprintHandler
+from ai_company.application.real_chapter import CHAPTER_TASK_TYPE, RealChapterPipelineHandler
 from ai_company.application.runtime import RuntimeProfile, load_runtime_settings
 from ai_company.worker.lite import make_mock_lite_worker
 
@@ -39,10 +41,19 @@ def main() -> None:
     worker = make_mock_lite_worker(sessions, worker_id, output_root=output_root)
     provider_settings = load_story_agent_settings()
     if provider_settings.enabled:
+        governance = GovernanceRepository(sessions)
+        budgets = BudgetRepository(sessions)
+        bindings = build_provider_bindings(provider_settings)
         worker.handlers["real_blueprint"] = RealBlueprintHandler(
-            StoryRepository(sessions), tasks, GovernanceRepository(sessions),
-            BudgetRepository(sessions), build_provider_bindings(provider_settings),
+            StoryRepository(sessions), tasks, governance,
+            budgets, bindings,
             provider_settings, worker_id,
+        )
+        worker.handlers[CHAPTER_TASK_TYPE] = RealChapterPipelineHandler(
+            tasks,
+            NovelWorkspaceRepository(sessions),
+            BudgetedStructuredAgentRunner(governance, budgets, bindings, provider_settings),
+            worker_id,
         )
     if args.loop:
         route = " -> ".join(provider_settings.ordered_providers)

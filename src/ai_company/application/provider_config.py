@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Mapping
 
 from ai_company.domain.workflow import DomainError
@@ -11,6 +11,12 @@ from ai_company.providers.base import TokenRateCard
 
 
 SUPPORTED_PROVIDERS = ("openai", "gemini")
+ROLE_WORKLOADS = {
+    "story_architect": "story_bible",
+    "chapter_writer": "chapter_writer",
+    "editor": "chapter_editor",
+    "continuity_qc": "continuity_qc",
+}
 
 
 def _positive_int(values: Mapping[str, str], key: str, *, allow_zero: bool = False) -> int:
@@ -35,6 +41,16 @@ class ProviderModelSettings:
 
 
 @dataclass(frozen=True)
+class AgentRouteSettings:
+    primary_provider: str
+    fallback_providers: tuple[str, ...]
+
+    @property
+    def ordered_providers(self) -> tuple[str, ...]:
+        return (self.primary_provider, *self.fallback_providers)
+
+
+@dataclass(frozen=True)
 class StoryAgentSettings:
     enabled: bool
     policy_version: str
@@ -44,6 +60,7 @@ class StoryAgentSettings:
     primary_provider: str
     fallback_providers: tuple[str, ...]
     providers: dict[str, ProviderModelSettings]
+    routes: dict[str, AgentRouteSettings] = field(default_factory=dict)
 
     @property
     def ordered_providers(self) -> tuple[str, ...]:
@@ -56,6 +73,11 @@ class StoryAgentSettings:
     @property
     def rate_card(self) -> TokenRateCard:
         return self.providers[self.primary_provider].rate_card
+
+    def route_for(self, workload: str) -> AgentRouteSettings:
+        return self.routes.get(
+            workload, AgentRouteSettings(self.primary_provider, self.fallback_providers),
+        )
 
 
 # Backward-compatible import name. The object is now deliberately multi-provider.
@@ -102,15 +124,32 @@ def load_story_agent_settings(
     if enabled_text not in {"true", "false"}:
         raise DomainError("AI_COMPANY_REAL_AI_ENABLED must be true or false.")
     enabled = enabled_text == "true"
-    primary = values.get("AI_COMPANY_STORY_ARCHITECT_PROVIDER", "gemini").strip().lower()
-    fallbacks = tuple(
+    architect_primary = values.get("AI_COMPANY_STORY_ARCHITECT_PROVIDER", "gemini").strip().lower()
+    architect_fallbacks = tuple(
         item.strip().lower()
         for item in values.get("AI_COMPANY_STORY_ARCHITECT_FALLBACKS", "").split(",")
         if item.strip()
     )
-    ordered = (primary, *fallbacks)
-    if len(set(ordered)) != len(ordered) or any(item not in SUPPORTED_PROVIDERS for item in ordered):
-        raise DomainError("Story architect providers must be unique and supported: openai, gemini.")
+
+    def role_route(role: str, workload: str) -> tuple[str, AgentRouteSettings]:
+        prefix = f"AI_COMPANY_{role.upper()}"
+        primary = values.get(f"{prefix}_PROVIDER", "").strip().lower() or architect_primary
+        fallback_text = values.get(f"{prefix}_FALLBACKS")
+        fallbacks = architect_fallbacks if fallback_text is None or not fallback_text.strip() else tuple(
+            item.strip().lower() for item in fallback_text.split(",") if item.strip()
+        )
+        ordered = (primary, *fallbacks)
+        if len(set(ordered)) != len(ordered) or any(item not in SUPPORTED_PROVIDERS for item in ordered):
+            raise DomainError(
+                f"{role.replace('_', ' ').title()} providers must be unique and supported: openai, gemini."
+            )
+        return workload, AgentRouteSettings(primary, fallbacks)
+
+    routes = dict(role_route(role, workload) for role, workload in ROLE_WORKLOADS.items())
+    architect = routes["story_bible"]
+    ordered = tuple(dict.fromkeys(
+        provider for route in routes.values() for provider in route.ordered_providers
+    ))
     required = {
         "AI_COMPANY_POLICY_VERSION": values.get("AI_COMPANY_POLICY_VERSION", ""),
         "AI_COMPANY_ASSIGNMENT_VERSION": values.get("AI_COMPANY_ASSIGNMENT_VERSION", ""),
@@ -134,9 +173,10 @@ def load_story_agent_settings(
         assignment_version=required["AI_COMPANY_ASSIGNMENT_VERSION"],
         budget_version=required["AI_COMPANY_BUDGET_VERSION"],
         daily_budget_minor=daily,
-        primary_provider=primary,
-        fallback_providers=fallbacks,
+        primary_provider=architect.primary_provider,
+        fallback_providers=architect.fallback_providers,
         providers=providers,
+        routes=routes,
     )
 
 

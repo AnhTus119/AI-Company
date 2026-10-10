@@ -1,6 +1,6 @@
 # Thiết lập OpenAI/Gemini agent và MuMuAINovel
 
-Hệ thống không thay ChatGPT bằng Gemini. Vai `story_architect` có một provider chính và các provider dự phòng đã được chủ dự án duyệt. Fallback chỉ chạy khi lỗi có thể thử lại (mất kết nối, dịch vụ tạm lỗi, rate/quota limit); lỗi key, policy, schema hoặc nội dung bị từ chối không tự chuyển provider.
+Hệ thống không thay ChatGPT bằng Gemini. Các vai `story_architect`, `chapter_writer`, `editor` và `continuity_qc` đều có provider chính và các provider dự phòng đã được chủ dự án duyệt. Fallback chỉ chạy khi lỗi có thể thử lại (mất kết nối, dịch vụ tạm lỗi, rate/quota limit); lỗi key, policy, schema hoặc nội dung bị từ chối không tự chuyển provider.
 
 ## 1. Chọn route agent
 
@@ -22,6 +22,19 @@ GEMINI_MODEL=model-id-chinh-xac
 ```
 
 Chỉ dùng OpenAI thì để `AI_COMPANY_STORY_ARCHITECT_FALLBACKS=`. Chỉ dùng Gemini thì đặt provider chính là `gemini`. Không nhập tên `chatgpt`; provider tự động là `openai`, còn model phải là model ID mà tài khoản API truy cập được.
+
+Ba vai viết chương mặc định kế thừa route trên. Nếu muốn phân vai, thêm các dòng sau; để trống nghĩa là kế thừa Story Architect:
+
+```dotenv
+AI_COMPANY_CHAPTER_WRITER_PROVIDER=gemini
+AI_COMPANY_CHAPTER_WRITER_FALLBACKS=openai
+AI_COMPANY_EDITOR_PROVIDER=openai
+AI_COMPANY_EDITOR_FALLBACKS=gemini
+AI_COMPANY_CONTINUITY_QC_PROVIDER=openai
+AI_COMPANY_CONTINUITY_QC_FALLBACKS=gemini
+```
+
+Ví dụ này để Gemini viết nháp, còn OpenAI biên tập và kiểm tra continuity. Chỉ các provider xuất hiện trong route mới cần key/model/rate card.
 
 Với từng provider được đưa vào route, điền rate card, giới hạn output và timeout tương ứng trong `.env`. Giá là **cent USD trên một triệu token**. Sao chép giá hiện tại từ trang chính thức của provider, không dùng số ví dụ cũ.
 
@@ -47,7 +60,7 @@ Kiểm tra trước khi chạy:
 python launch_local.py --check
 ```
 
-Nút **Tạo dàn ý AI thật** trên dashboard sẽ gọi provider chính đã duyệt. Audit của kết quả ghi provider, model và việc có dùng fallback hay không. Mọi lần thử, kể cả fallback, đều qua Cloud Boundary và giữ ngân sách trước khi gọi.
+Nút **Tạo dàn ý AI thật** trên dashboard sẽ gọi provider chính đã duyệt. Sau khi tạo Novel Workspace, nút viết chương chạy tuần tự `chapter_writer → editor → continuity_qc`. Mỗi vai có budget reservation và provider audit riêng. Chỉ khi QC trả về `passed=true` thì chương đã biên tập mới được lưu; nếu không, draft vẫn nằm trong checkpoint task với trạng thái `needs_revision`.
 
 ## 2. Novel Workspace native không cần đăng nhập
 

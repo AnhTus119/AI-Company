@@ -57,6 +57,25 @@ def test_story_agent_can_assign_openai_primary_with_gemini_fallback(tmp_path: Pa
     assert settings.providers["gemini"].model == "gemini-test-model"
 
 
+def test_story_roles_inherit_architect_route_and_can_be_overridden(tmp_path: Path) -> None:
+    environment = configured_environment(tmp_path) | {
+        "AI_COMPANY_EDITOR_PROVIDER": "gemini",
+        "AI_COMPANY_CONTINUITY_QC_PROVIDER": "openai",
+        "OPENAI_API_KEY": "local-openai-test-key",
+        "OPENAI_MODEL": "gpt-test-model",
+        "AI_COMPANY_OPENAI_RATE_CARD_VERSION": "openai-rate-v1",
+        "AI_COMPANY_OPENAI_INPUT_MINOR_PER_MILLION": "100",
+        "AI_COMPANY_OPENAI_OUTPUT_MINOR_PER_MILLION": "500",
+        "AI_COMPANY_OPENAI_MAX_OUTPUT_TOKENS": "6000",
+        "AI_COMPANY_OPENAI_TIMEOUT_SECONDS": "60",
+    }
+    settings = load_gemini_prototype_settings(environment)
+    assert settings.route_for("chapter_writer").ordered_providers == ("gemini",)
+    assert settings.route_for("chapter_editor").ordered_providers == ("gemini",)
+    assert settings.route_for("continuity_qc").ordered_providers == ("openai",)
+    assert set(settings.providers) == {"gemini", "openai"}
+
+
 def test_local_env_loads_only_allowlisted_settings_without_overrides(tmp_path: Path, monkeypatch) -> None:
     path = tmp_path / ".env"
     path.write_text("GEMINI_MODEL=from-file\nAI_COMPANY_REAL_AI_ENABLED=true\n", encoding="utf-8")

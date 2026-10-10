@@ -25,6 +25,7 @@ from ai_company.application.novel_workspace import (
     add_foreshadow, apply_chapter_draft, materialize_workspace,
 )
 from ai_company.application.real_blueprint import real_blueprint_key
+from ai_company.application.real_chapter import CHAPTER_TASK_TYPE, real_chapter_key
 from ai_company.application.runtime import RuntimeProfile, load_runtime_settings
 from ai_company.domain.workflow import DomainError, SourceType, StorySnapshot
 
@@ -216,6 +217,56 @@ def create_app(
             )
         except (DomainError, ValueError) as exc:
             raise HTTPException(409, str(exc)) from exc
+
+    @app.post(
+        "/stories/{story_id}/novel-workspace/chapters/{chapter_number}/generate",
+        status_code=202,
+    )
+    def queue_real_chapter(story_id: UUID, chapter_number: int) -> dict:
+        try:
+            provider_settings = load_story_agent_settings()
+            if not provider_settings.enabled:
+                raise DomainError("Real AI is disabled; complete the local provider setup first.")
+            current = novel_workspaces.get(story_id)
+            workspace = NovelWorkspace.model_validate(current["workspace"])
+            if chapter_number != workspace.continuity.last_completed_chapter + 1:
+                raise DomainError("Generate the next chapter in sequential order.")
+            if not 1 <= chapter_number <= 20:
+                raise DomainError("Chapter number must be between 1 and 20.")
+            version = current["row_version"]
+            task_id = tasks.create_task(
+                story_id,
+                CHAPTER_TASK_TYPE,
+                real_chapter_key(story_id, chapter_number, version),
+                datetime.now(timezone.utc),
+                attempt_limit=1,
+                request_payload={
+                    "chapter_number": chapter_number,
+                    "workspace_version": version,
+                },
+            )
+            result = tasks.get_task_result(task_id, story_id, expected_type=CHAPTER_TASK_TYPE)
+            return {
+                "task_id": str(task_id),
+                "status": result["status"],
+                "chapter_number": chapter_number,
+                "is_mock": False,
+            }
+        except (DomainError, ValueError) as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.get(
+        "/stories/{story_id}/novel-workspace/chapters/{chapter_number}/generate/{task_id}",
+    )
+    def get_real_chapter(story_id: UUID, chapter_number: int, task_id: UUID) -> dict:
+        try:
+            result = tasks.get_task_result(task_id, story_id, expected_type=CHAPTER_TASK_TYPE)
+            checkpoint = result.get("checkpoint") or {}
+            if checkpoint and checkpoint.get("chapter_number") != chapter_number:
+                raise DomainError("Task does not belong to this chapter.")
+            return result
+        except DomainError as exc:
+            raise HTTPException(404, str(exc)) from exc
 
     @app.post("/stories/{story_id}/novel-workspace/foreshadows", status_code=201)
     def create_foreshadow(story_id: UUID, body: ForeshadowInput) -> dict:
