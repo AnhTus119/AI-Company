@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
@@ -185,6 +186,9 @@ class RealChapterPipelineHandler:
             raise DomainError("Chapter task request is invalid.") from exc
         if not 1 <= chapter_number <= 20 or expected_version <= 0:
             raise DomainError("Chapter task request is outside the supported range.")
+        auto_continue = request.get("auto_continue", False)
+        if not isinstance(auto_continue, bool):
+            raise DomainError("Chapter task auto-continue flag is invalid.")
         current = self.workspaces.get(story_id)
         if current["row_version"] != expected_version:
             raise DomainError("Novel workspace changed before chapter generation started.")
@@ -256,4 +260,27 @@ class RealChapterPipelineHandler:
             if "changed" not in str(exc):
                 raise
             return {**checkpoint, "state": "workspace_conflict"}
-        return {**checkpoint, "state": "saved", "saved_workspace_version": saved["row_version"]}
+        result = {**checkpoint, "state": "saved", "saved_workspace_version": saved["row_version"]}
+        if auto_continue and chapter_number < 20:
+            next_number = chapter_number + 1
+            try:
+                next_task_id = self.tasks.create_task(
+                    story_id,
+                    CHAPTER_TASK_TYPE,
+                    real_chapter_key(story_id, next_number, saved["row_version"]),
+                    datetime.now(timezone.utc),
+                    attempt_limit=1,
+                    request_payload={
+                        "chapter_number": next_number,
+                        "workspace_version": saved["row_version"],
+                        "auto_continue": True,
+                    },
+                )
+            except DomainError:
+                return {**result, "auto_continue_state": "scheduling_conflict"}
+            return {
+                **result,
+                "auto_continue_state": "queued",
+                "next_task_id": str(next_task_id),
+            }
+        return {**result, "auto_continue_state": "finished" if auto_continue else "disabled"}

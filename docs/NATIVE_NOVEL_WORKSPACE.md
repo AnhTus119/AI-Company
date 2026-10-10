@@ -21,7 +21,10 @@ Mỗi workspace có `row_version`. Khi ghi chapter hoặc foreshadow, client ph�
 ```text
 POST /stories/{story_id}/novel-workspace
 GET  /stories/{story_id}/novel-workspace
+GET  /stories/{story_id}/novel-workspace/export.txt
 PUT  /stories/{story_id}/novel-workspace/chapters/{chapter_number}
+POST /stories/{story_id}/novel-workspace/chapters/{chapter_number}/generate
+POST /stories/{story_id}/novel-workspace/generate-all
 POST /stories/{story_id}/novel-workspace/foreshadows
 ```
 
@@ -44,4 +47,6 @@ Ví dụ lưu chapter:
 
 MuMuAINovel vẫn là một integration tùy chọn nếu cần giao diện và hệ sinh thái riêng của họ. Khi dùng upstream nguyên bản, API import yêu cầu session đăng nhập local. AI Company core không còn phụ thuộc vào integration đó; bridge export/push được giữ riêng và không chạy mặc định.
 
-Các bước tiếp theo cho workspace native là nối chapter-writer/editor/QC agents, bổ sung màn hình biên tập chapter và thao tác resolve foreshadow. Các bước này vẫn phải qua model assignment, Cloud Boundary, budget và audit hiện có.
+Workspace native đã nối `chapter_writer → editor → continuity_qc`. Có thể chạy từng chương hoặc tự nối task đến chương 20; chuỗi tự dừng khi QC không đạt, budget từ chối hoặc provider lỗi. Mỗi provider call vẫn qua model assignment, Cloud Boundary, budget và audit. Khi đủ 20 chương reviewed, workspace chuyển sang `complete` và dashboard cho tải `story.txt`.
+
+Các phần còn cần phát triển ngoài lát cắt text production là màn hình biên tập chapter chi tiết, thao tác resolve foreshadow, media thật và publishing adapter.

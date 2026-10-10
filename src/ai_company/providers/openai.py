@@ -12,6 +12,7 @@ from urllib.request import Request, urlopen
 from ai_company.providers.base import ProviderFailure, ProviderUsage, StructuredRequest, StructuredResult
 
 HttpPost = Callable[[str, dict[str, str], bytes, float], tuple[int, dict]]
+HttpGet = Callable[[str, dict[str, str], float], tuple[int, dict]]
 
 
 def _post_json(url: str, headers: dict[str, str], body: bytes, timeout: float) -> tuple[int, dict]:
@@ -24,6 +25,27 @@ def _post_json(url: str, headers: dict[str, str], body: bytes, timeout: float) -
             raise ProviderFailure("quota_or_rate_limit", retryable=True) from exc
         if exc.code in {401, 403}:
             raise ProviderFailure("authentication_failed", retryable=False) from exc
+        if 500 <= exc.code <= 599:
+            raise ProviderFailure("provider_unavailable", retryable=True) from exc
+        raise ProviderFailure("provider_request_rejected", retryable=False) from exc
+    except (URLError, TimeoutError) as exc:
+        raise ProviderFailure("provider_unavailable", retryable=True) from exc
+    except (json.JSONDecodeError, UnicodeError) as exc:
+        raise ProviderFailure("invalid_provider_response", retryable=False) from exc
+
+
+def _get_json(url: str, headers: dict[str, str], timeout: float) -> tuple[int, dict]:
+    request = Request(url, headers=headers, method="GET")
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            return response.status, json.load(response)
+    except HTTPError as exc:
+        if exc.code == 429:
+            raise ProviderFailure("quota_or_rate_limit", retryable=True) from exc
+        if exc.code in {401, 403}:
+            raise ProviderFailure("authentication_failed", retryable=False) from exc
+        if exc.code == 404:
+            raise ProviderFailure("model_not_available", retryable=False) from exc
         if 500 <= exc.code <= 599:
             raise ProviderFailure("provider_unavailable", retryable=True) from exc
         raise ProviderFailure("provider_request_rejected", retryable=False) from exc
@@ -55,6 +77,7 @@ class OpenAIResponsesStructuredProvider:
         self, api_key: str, model_key: str, *,
         base_url: str = "https://api.openai.com/v1", timeout_seconds: float = 60,
         http_post: HttpPost = _post_json,
+        http_get: HttpGet = _get_json,
     ) -> None:
         if not api_key.strip():
             raise ValueError("OPENAI_API_KEY is required.")
@@ -70,6 +93,16 @@ class OpenAIResponsesStructuredProvider:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self._http_post = http_post
+        self._http_get = http_get
+
+    def check_access(self) -> None:
+        status, response = self._http_get(
+            f"{self.base_url}/models/{self.model_key}",
+            {"Authorization": f"Bearer {self._api_key}"},
+            self.timeout_seconds,
+        )
+        if status != 200 or response.get("id") != self.model_key:
+            raise ProviderFailure("model_not_available", retryable=False)
 
     def generate_structured(self, request: StructuredRequest) -> StructuredResult:
         if not request.prompt.strip() or request.max_output_tokens <= 0:

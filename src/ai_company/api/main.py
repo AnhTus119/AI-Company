@@ -8,7 +8,7 @@ from pathlib import Path
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
 
@@ -22,7 +22,7 @@ from ai_company.application.mock_package import mock_package_key
 from ai_company.application.provider_config import load_story_agent_settings
 from ai_company.application.novel_workspace import (
     ChapterDraftInput, ForeshadowInput, NovelWorkspace,
-    add_foreshadow, apply_chapter_draft, materialize_workspace,
+    add_foreshadow, apply_chapter_draft, materialize_workspace, render_complete_story,
 )
 from ai_company.application.real_blueprint import real_blueprint_key
 from ai_company.application.real_chapter import CHAPTER_TASK_TYPE, real_chapter_key
@@ -201,6 +201,19 @@ def create_app(
         except DomainError as exc:
             raise HTTPException(404, str(exc)) from exc
 
+    @app.get("/stories/{story_id}/novel-workspace/export.txt", response_class=PlainTextResponse)
+    def export_complete_novel(story_id: UUID) -> PlainTextResponse:
+        try:
+            current = novel_workspaces.get(story_id)
+            content = render_complete_story(NovelWorkspace.model_validate(current["workspace"]))
+        except (DomainError, ValueError) as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return PlainTextResponse(
+            content,
+            media_type="text/plain; charset=utf-8",
+            headers={"Content-Disposition": 'attachment; filename="story.txt"'},
+        )
+
     @app.put("/stories/{story_id}/novel-workspace/chapters/{chapter_number}")
     def save_novel_chapter(
         story_id: UUID, chapter_number: int, body: ChapterDraftInput,
@@ -243,6 +256,7 @@ def create_app(
                 request_payload={
                     "chapter_number": chapter_number,
                     "workspace_version": version,
+                    "auto_continue": False,
                 },
             )
             result = tasks.get_task_result(task_id, story_id, expected_type=CHAPTER_TASK_TYPE)
@@ -250,6 +264,45 @@ def create_app(
                 "task_id": str(task_id),
                 "status": result["status"],
                 "chapter_number": chapter_number,
+                "is_mock": False,
+            }
+        except (DomainError, ValueError) as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.post(
+        "/stories/{story_id}/novel-workspace/generate-all",
+        status_code=202,
+    )
+    def queue_remaining_real_chapters(story_id: UUID) -> dict:
+        """Queue the next chapter and let each successful QC pass enqueue its successor."""
+        try:
+            provider_settings = load_story_agent_settings()
+            if not provider_settings.enabled:
+                raise DomainError("Real AI is disabled; complete the local provider setup first.")
+            current = novel_workspaces.get(story_id)
+            workspace = NovelWorkspace.model_validate(current["workspace"])
+            chapter_number = workspace.continuity.last_completed_chapter + 1
+            if chapter_number > 20:
+                raise DomainError("All 20 chapters are already complete.")
+            version = current["row_version"]
+            task_id = tasks.create_task(
+                story_id,
+                CHAPTER_TASK_TYPE,
+                real_chapter_key(story_id, chapter_number, version),
+                datetime.now(timezone.utc),
+                attempt_limit=1,
+                request_payload={
+                    "chapter_number": chapter_number,
+                    "workspace_version": version,
+                    "auto_continue": True,
+                },
+            )
+            result = tasks.get_task_result(task_id, story_id, expected_type=CHAPTER_TASK_TYPE)
+            return {
+                "task_id": str(task_id),
+                "status": result["status"],
+                "starting_chapter": chapter_number,
+                "auto_continue": True,
                 "is_mock": False,
             }
         except (DomainError, ValueError) as exc:

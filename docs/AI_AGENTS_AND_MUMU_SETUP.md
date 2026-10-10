@@ -6,6 +6,13 @@ Hệ thống không thay ChatGPT bằng Gemini. Các vai `story_architect`, `cha
 
 Trong `.env`, chọn một trong các cấu hình sau.
 
+Model mặc định đã được điền trong `.env.example` theo tài liệu chính thức ngày 2026-10-10:
+
+- OpenAI: `gpt-6.1-sol`, cân bằng chất lượng/chi phí cho production qua Responses API.
+- Gemini: `gemini-3.8-flash`, model Flash stable hiện hành.
+
+Giá trong file mẫu là bảng giá standard tại ngày ghi trong `RATE_CARD_VERSION`; luôn đối chiếu lại trước khi duyệt vì provider có thể đổi giá.
+
 OpenAI làm chính, Gemini dự phòng:
 
 ```dotenv
@@ -52,7 +59,9 @@ AI_COMPANY_OPENAI_MAX_OUTPUT_TOKENS=6000
 AI_COMPANY_OPENAI_TIMEOUT_SECONDS=60
 ```
 
-Gemini dùng nhóm biến tương tự đã có trong `.env.example`. Sau khi kiểm tra, chạy `Setup-AI-Agents.cmd` đúng một lần. Khi đổi route/model/giá/policy, tăng cả ba version lên `v2` rồi chạy setup lại; snapshot cũ là bất biến.
+Gemini dùng nhóm biến tương tự đã có trong `.env.example`. Sau khi kiểm tra, chạy `Setup-AI-Agents.cmd` đúng một lần. Khi đổi route/model/giá/policy, tăng cả ba version sang một tên chưa từng dùng (ví dụ `v2`, rồi `v3`) trước khi chạy setup lại; snapshot cũ là bất biến.
+
+Trước khi duyệt snapshot, có thể chạy `Test-AI-Providers.cmd`. Lệnh này chỉ gọi endpoint metadata model để xác nhận key được chấp nhận và model nhìn thấy được; nó không gửi premise/chương và không lưu key. `Setup-AI-Agents.cmd` cũng tự chạy kiểm tra này trước khi ghi approval.
 
 Kiểm tra trước khi chạy:
 
@@ -60,7 +69,14 @@ Kiểm tra trước khi chạy:
 python launch_local.py --check
 ```
 
-Nút **Tạo dàn ý AI thật** trên dashboard sẽ gọi provider chính đã duyệt. Sau khi tạo Novel Workspace, nút viết chương chạy tuần tự `chapter_writer → editor → continuity_qc`. Mỗi vai có budget reservation và provider audit riêng. Chỉ khi QC trả về `passed=true` thì chương đã biên tập mới được lưu; nếu không, draft vẫn nằm trong checkpoint task với trạng thái `needs_revision`.
+Nút **Tạo dàn ý AI thật** trên dashboard sẽ gọi provider chính đã duyệt. Sau khi tạo Novel Workspace, nút viết chương chạy tuần tự `chapter_writer → editor → continuity_qc`. Nút **Tự chạy ... đến chương 20** dùng các task nhỏ nối tiếp nhau, nên từng chương vẫn có lease, budget reservation và provider audit riêng. Chuỗi tự dừng nếu QC không đạt, hết ngân sách hoặc provider lỗi. Chỉ khi QC trả về `passed=true` thì chương đã biên tập mới được lưu; nếu không, draft vẫn nằm trong checkpoint task với trạng thái `needs_revision`.
+
+## Lấy key còn thiếu
+
+- Gemini: vào [Google AI Studio API Keys](https://aistudio.google.com/app/apikey), tạo key trong project của bạn, rồi paste vào `GEMINI_API_KEY` trong `.env`. Nên dùng auth key/restricted key dành riêng cho Gemini API.
+- OpenAI: đăng nhập [OpenAI Platform API Keys](https://platform.openai.com/api-keys), tạo project key mới, lưu ngay khi key được hiển thị và paste vào `OPENAI_API_KEY` trong `.env`. Gói ChatGPT và OpenAI API là hai sản phẩm/billing riêng; dùng ChatGPT trên web không tự cấp API key hoặc API credit.
+
+Không paste key vào chat, GitHub, `.env.example` hoặc ảnh chụp màn hình. Nếu một key từng bị lộ, revoke key đó và tạo key mới.
 
 ## 2. Novel Workspace native không cần đăng nhập
 

@@ -113,6 +113,8 @@
         const nextChapter = story.novel_workspace.chapter_count + 1;
         buttons.push(actionButton(`Viết + biên tập + QC chương ${nextChapter} (dùng quota/chi phí)`,
           `/stories/${story.id}/novel-workspace/chapters/${nextChapter}/generate`));
+        buttons.push(actionButton(`Tự chạy từ chương ${nextChapter} đến chương 20`,
+          `/stories/${story.id}/novel-workspace/generate-all`));
       }
       let button;
       if (!tasks.mock_blueprint) button = actionButton('Tạo dàn ý mock', `/stories/${story.id}/mock-blueprint`);
@@ -129,6 +131,11 @@
       }
       if (story.novel_workspace) {
         node.append(element('div','path',`Novel Workspace local · ${story.novel_workspace.chapter_count}/20 chương · version ${story.novel_workspace.row_version} · không cần đăng nhập`));
+        if (story.novel_workspace.status === 'complete') {
+          const exportLink = element('a','','Tải story.txt hoàn chỉnh');
+          exportLink.href = `/stories/${story.id}/novel-workspace/export.txt`;
+          node.append(exportLink);
+        }
       }
       if (chapterTask) {
         const state = chapterTask.state ? ` · kết quả ${chapterTask.state}` : '';

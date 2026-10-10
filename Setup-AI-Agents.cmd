@@ -7,6 +7,13 @@ if not exist ".env" (
   exit /b 1
 )
 set "PYTHONPATH=%CD%\src;%PYTHONPATH%"
+python -m ai_company.application.provider_check_cli
+if errorlevel 1 (
+  echo.
+  echo Dung setup vi key hoac model chua truy cap duoc. Khong co noi dung story nao duoc gui.
+  pause
+  exit /b 1
+)
 python -m ai_company.application.provider_setup_cli --approve --approved-by local-owner
 if errorlevel 1 (
   echo.

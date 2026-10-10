@@ -42,6 +42,21 @@ def test_gemini_adapter_rejects_malformed_response_without_exposing_body() -> No
     assert "private provider body" not in str(failure.value)
 
 
+def test_gemini_access_check_uses_model_endpoint_without_story_payload() -> None:
+    captured = {}
+
+    def get(url, headers, timeout):
+        captured.update(url=url, headers=headers, timeout=timeout)
+        return 200, {"name": "models/gemini-3.8-flash"}
+
+    provider = GeminiStructuredProvider(
+        "private-test-key", "gemini-3.8-flash", http_get=get,
+    )
+    provider.check_access()
+    assert captured["url"].endswith("/models/gemini-3.8-flash")
+    assert set(captured) == {"url", "headers", "timeout"}
+
+
 def test_explicit_rate_card_rounds_up_and_supports_free_tier() -> None:
     paid = TokenRateCard("rate-v1", "USD", 75, 375)
     assert paid.upper_bound(10_000, 2_000) == 2

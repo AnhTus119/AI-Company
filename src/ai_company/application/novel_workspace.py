@@ -185,9 +185,14 @@ def apply_chapter_draft(
         open_loops=loops,
         timeline_notes=[*workspace.continuity.timeline_notes, *body.continuity_notes],
     )
+    workspace_status = (
+        "complete" if completed == 20 and len(chapters) == 20
+        else "review" if any(item.status == "reviewed" for item in chapters.values())
+        else "drafting"
+    )
     return NovelWorkspace.model_validate({
         **workspace.model_dump(),
-        "status": "review" if any(item.status == "reviewed" for item in chapters.values()) else "drafting",
+        "status": workspace_status,
         "chapters": sorted(chapters.values(), key=lambda item: item.chapter_number),
         "outlines": outlines,
         "continuity": continuity,
@@ -205,3 +210,16 @@ def add_foreshadow(workspace: NovelWorkspace, body: ForeshadowInput) -> NovelWor
     return NovelWorkspace.model_validate({
         **workspace.model_dump(), "foreshadows": [*workspace.foreshadows, item],
     })
+
+
+def render_complete_story(workspace: NovelWorkspace) -> str:
+    """Render the reviewed 20-chapter workspace as a deterministic UTF-8 text artifact."""
+    chapters = sorted(workspace.chapters, key=lambda item: item.chapter_number)
+    if workspace.status != "complete" or [item.chapter_number for item in chapters] != list(range(1, 21)):
+        raise DomainError("Story export requires 20 sequential QC-reviewed chapters.")
+    if any(item.status not in {"reviewed", "approved"} for item in chapters):
+        raise DomainError("Story export requires every chapter to pass review.")
+    sections = [workspace.title.strip()]
+    for chapter in chapters:
+        sections.append(f"Chapter {chapter.chapter_number}: {chapter.title.strip()}\n\n{chapter.content.strip()}")
+    return "\n\n".join(sections) + "\n"

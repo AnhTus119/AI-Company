@@ -43,3 +43,18 @@ def test_openai_adapter_rejects_refusal_without_exposing_response() -> None:
         provider.generate_structured(StructuredRequest("Return JSON", {"type": "object"}, 100))
     assert failure.value.code == "model_refusal"
     assert "private" not in str(failure.value)
+
+
+def test_openai_access_check_uses_model_endpoint_without_story_payload() -> None:
+    captured = {}
+
+    def get(url, headers, timeout):
+        captured.update(url=url, headers=headers, timeout=timeout)
+        return 200, {"id": "gpt-6.1-sol"}
+
+    provider = OpenAIResponsesStructuredProvider(
+        "private-openai-key", "gpt-6.1-sol", http_get=get,
+    )
+    provider.check_access()
+    assert captured["url"].endswith("/models/gpt-6.1-sol")
+    assert set(captured) == {"url", "headers", "timeout"}

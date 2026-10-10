@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from uuid import UUID
 
 import pytest
 from sqlalchemy import func, select
@@ -94,7 +95,7 @@ class SequentialProvider:
         return StructuredResult(value, ProviderUsage(100, 100, 200))
 
 
-def pipeline(tmp_path, qc_passed: bool):
+def pipeline(tmp_path, qc_passed: bool, *, auto_continue: bool = False):
     sessions = make_session_factory(f"sqlite:///{tmp_path / 'chapter.sqlite3'}")
     initialize_lite_schema(sessions)
     stories = StoryRepository(sessions)
@@ -106,7 +107,10 @@ def pipeline(tmp_path, qc_passed: bool):
     now = datetime.now(timezone.utc)
     task_id = tasks.create_task(
         story_id, CHAPTER_TASK_TYPE, real_chapter_key(story_id, 1, 1), now,
-        request_payload={"chapter_number": 1, "workspace_version": 1},
+        request_payload={
+            "chapter_number": 1, "workspace_version": 1,
+            "auto_continue": auto_continue,
+        },
     )
     governance = GovernanceRepository(sessions)
     governance.create_policy_version("policy-v1", {"provider_permissions": {"gemini": {
@@ -162,3 +166,15 @@ def test_real_chapter_pipeline_saves_only_after_qc(
     assert provider.calls == 3
     with sessions() as session:
         assert session.scalar(select(func.count(ProviderCallRow.id))) == 3
+
+
+def test_successful_auto_pipeline_queues_next_chapter_with_new_workspace_version(tmp_path) -> None:
+    _, story_id, _, tasks, _, _, worker = pipeline(tmp_path, True, auto_continue=True)
+    assert worker.run_once(provider_slots=1, budget_slots=1) == "completed"
+    next_result = tasks.get_task_result_by_key(
+        story_id, real_chapter_key(story_id, 2, 2), expected_type=CHAPTER_TASK_TYPE,
+    )
+    assert next_result["status"] == "queued"
+    assert tasks.get_task_request(UUID(next_result["task_id"])) == {
+        "chapter_number": 2, "workspace_version": 2, "auto_continue": True,
+    }

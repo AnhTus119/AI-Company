@@ -11,6 +11,7 @@ from ai_company.adapters.database import (
 from ai_company.api.main import create_app
 from ai_company.application.novel_workspace import (
     ChapterDraftInput, NovelWorkspace, apply_chapter_draft, materialize_workspace,
+    render_complete_story,
 )
 from ai_company.application.real_blueprint import real_blueprint_key
 from ai_company.domain.workflow import DomainError, SourceType
@@ -92,6 +93,22 @@ def test_lite_schema_three_upgrades_to_native_workspace_table(tmp_path) -> None:
         assert connection.exec_driver_sql("PRAGMA user_version").scalar() == 5
 
 
+def test_twenty_reviewed_chapters_complete_and_export_in_order() -> None:
+    story_id = UUID("00000000-0000-0000-0000-000000000001")
+    workspace = materialize_workspace(story_id, blueprint())
+    for chapter_number in range(1, 21):
+        workspace = apply_chapter_draft(workspace, chapter_number, ChapterDraftInput(
+            expected_version=chapter_number,
+            title=f"Part {chapter_number}",
+            content=f"Reviewed content for chapter {chapter_number}.",
+            status="reviewed",
+        ))
+    assert workspace.status == "complete"
+    exported = render_complete_story(workspace)
+    assert exported.startswith("The Door She Never Opened\n\nChapter 1: Part 1")
+    assert exported.index("Chapter 19: Part 19") < exported.index("Chapter 20: Part 20")
+
+
 def test_local_api_materializes_workspace_without_login(tmp_path, monkeypatch) -> None:
     sessions, stories, story_id = make_story(tmp_path)
     tasks = TaskRepository(sessions)
@@ -138,4 +155,6 @@ def test_local_api_materializes_workspace_without_login(tmp_path, monkeypatch) -
     )(story_id, 1)
     assert queued["status"] == "queued" and queued["chapter_number"] == 1
     request = tasks.get_task_request(UUID(queued["task_id"]))
-    assert request == {"chapter_number": 1, "workspace_version": 2}
+    assert request == {
+        "chapter_number": 1, "workspace_version": 2, "auto_continue": False,
+    }
