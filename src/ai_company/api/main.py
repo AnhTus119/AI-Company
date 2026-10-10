@@ -12,11 +12,18 @@ from fastapi.responses import FileResponse, HTMLResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
 
-from ai_company.adapters.database import TaskRepository, StoryRepository, initialize_lite_schema, make_session_factory
+from ai_company.adapters.database import (
+    NovelWorkspaceRepository, TaskRepository, StoryRepository,
+    initialize_lite_schema, make_session_factory,
+)
 from ai_company.application.mock_chapters import mock_blueprint_key, mock_chapters_key
 from ai_company.application.mock_export import verified_mock_artifact
 from ai_company.application.mock_package import mock_package_key
 from ai_company.application.provider_config import load_story_agent_settings
+from ai_company.application.novel_workspace import (
+    ChapterDraftInput, ForeshadowInput, NovelWorkspace,
+    add_foreshadow, apply_chapter_draft, materialize_workspace,
+)
 from ai_company.application.real_blueprint import real_blueprint_key
 from ai_company.application.runtime import RuntimeProfile, load_runtime_settings
 from ai_company.domain.workflow import DomainError, SourceType, StorySnapshot
@@ -73,6 +80,7 @@ def create_app(
             artifact_root = data_dir / "artifacts" if data_dir is not None else None
 
     tasks = TaskRepository(repository.sessions)
+    novel_workspaces = NovelWorkspaceRepository(repository.sessions)
     # API and worker may be separate processes; do not interrupt a live worker.
     tasks.hold_interrupted_tasks(datetime.now(timezone.utc))
 
@@ -87,8 +95,14 @@ def create_app(
     @app.get("/operator/stories")
     def operator_stories() -> dict:
         stories = repository.list_mock_drafts()
-        statuses = tasks.list_mock_task_statuses(tuple(UUID(item["id"]) for item in stories))
-        return {"stories": [{**item, "tasks": statuses.get(item["id"], {})} for item in stories]}
+        story_ids = tuple(UUID(item["id"]) for item in stories)
+        statuses = tasks.list_mock_task_statuses(story_ids)
+        workspaces = novel_workspaces.summaries(story_ids)
+        return {"stories": [{
+            **item,
+            "tasks": statuses.get(item["id"], {}),
+            "novel_workspace": workspaces.get(item["id"]),
+        } for item in stories]}
 
     @app.get("/health")
     def health() -> dict:
@@ -164,6 +178,59 @@ def create_app(
             return tasks.get_task_result(task_id, story_id, expected_type="real_blueprint")
         except DomainError as exc:
             raise HTTPException(404, str(exc)) from exc
+
+    @app.post("/stories/{story_id}/novel-workspace", status_code=201)
+    def create_novel_workspace(story_id: UUID) -> dict:
+        """Materialize the completed real blueprint into the native local editor state."""
+        try:
+            result = tasks.get_task_result_by_key(
+                story_id, real_blueprint_key(story_id), expected_type="real_blueprint",
+            )
+            if result["status"] != "completed" or not result.get("checkpoint"):
+                raise DomainError("Complete the real blueprint before creating its novel workspace.")
+            workspace = materialize_workspace(story_id, result["checkpoint"])
+            return novel_workspaces.create_or_get(story_id, workspace.model_dump(mode="json"))
+        except DomainError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.get("/stories/{story_id}/novel-workspace")
+    def get_novel_workspace(story_id: UUID) -> dict:
+        try:
+            return novel_workspaces.get(story_id)
+        except DomainError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.put("/stories/{story_id}/novel-workspace/chapters/{chapter_number}")
+    def save_novel_chapter(
+        story_id: UUID, chapter_number: int, body: ChapterDraftInput,
+    ) -> dict:
+        try:
+            current = novel_workspaces.get(story_id)
+            workspace = NovelWorkspace.model_validate(current["workspace"])
+            updated = apply_chapter_draft(workspace, chapter_number, body)
+            return novel_workspaces.save(
+                story_id, body.expected_version, updated.model_dump(mode="json"),
+                action="chapter_saved", details={
+                    "chapter_number": chapter_number, "status": body.status,
+                },
+            )
+        except (DomainError, ValueError) as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.post("/stories/{story_id}/novel-workspace/foreshadows", status_code=201)
+    def create_foreshadow(story_id: UUID, body: ForeshadowInput) -> dict:
+        try:
+            current = novel_workspaces.get(story_id)
+            workspace = NovelWorkspace.model_validate(current["workspace"])
+            updated = add_foreshadow(workspace, body)
+            return novel_workspaces.save(
+                story_id, body.expected_version, updated.model_dump(mode="json"),
+                action="foreshadow_added", details={
+                    "planned_payoff_chapter": body.planned_payoff_chapter,
+                },
+            )
+        except (DomainError, ValueError) as exc:
+            raise HTTPException(409, str(exc)) from exc
 
     @app.post("/stories/{story_id}/mock-chapters", status_code=202)
     def queue_mock_chapters(story_id: UUID) -> dict:

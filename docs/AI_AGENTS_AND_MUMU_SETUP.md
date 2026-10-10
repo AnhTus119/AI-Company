@@ -49,7 +49,11 @@ python launch_local.py --check
 
 Nút **Tạo dàn ý AI thật** trên dashboard sẽ gọi provider chính đã duyệt. Audit của kết quả ghi provider, model và việc có dùng fallback hay không. Mọi lần thử, kể cả fallback, đều qua Cloud Boundary và giữ ngân sách trước khi gọi.
 
-## 2. Cài MuMuAINovel như workspace riêng
+## 2. Novel Workspace native không cần đăng nhập
+
+AI Company đã có workspace native riêng cho Story Bible, nhân vật, 20 outline, chapter draft, continuity/open loops và foreshadow. Sau khi real blueprint hoàn tất, bấm **Tạo Novel Workspace local** trên dashboard. Phần này chạy trong SQLite/API local, không yêu cầu username/password và không phụ thuộc MuMuAINovel. Xem [Novel Workspace](NATIVE_NOVEL_WORKSPACE.md).
+
+## 3. Tùy chọn: cài MuMuAINovel như workspace riêng
 
 MuMuAINovel là ứng dụng viết tiểu thuyết, không phải model provider. Giữ nó thành service riêng để tránh trộn mã GPLv3 và database của hai dự án.
 
@@ -62,7 +66,7 @@ MuMuAINovel là ứng dụng viết tiểu thuyết, không phải model provide
 
 Lưu ý: các cuộc gọi model do MuMuAINovel tự thực hiện **không nằm trong budget ledger của AI Company**. Đặt spend limit riêng ở provider hoặc chỉ dùng MuMu để biên tập/viết tiếp sau khi AI Company đã tạo blueprint.
 
-## 3. Nối AI Company với MuMuAINovel
+## 4. Tùy chọn: nối AI Company với MuMuAINovel
 
 Thêm vào `.env` của AI Company:
 

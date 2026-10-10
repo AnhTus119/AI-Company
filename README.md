@@ -15,7 +15,8 @@ Hướng Vercel/Render đã **hủy**. Đây là web **chạy trên từng máy*
 - Quy tắc Cloud Boundary và chọn provider/fallback theo assignment đã duyệt.
 - Bản ghi policy/model-assignment bất biến cùng sổ provider/cost gắn với task attempt; mọi provider thật bị chặn cho đến khi route và ngân sách được duyệt.
 - Vai `story_architect` hỗ trợ OpenAI Responses API hoặc Gemini làm primary/fallback. Mỗi lần thử giữ ngân sách riêng, ghi provider/model/fallback và chỉ fallback cho lỗi có thể thử lại. Nó tạo Story Bible thật, kế hoạch 20 chương và Hook Contract; chưa viết thân 20 chương.
-- Cầu nối MuMuAINovel có thể xuất hoặc push real blueprint sang project import v1.1.0 của một instance local. MuMu là workspace tiểu thuyết riêng, không phải model provider và chi phí model phát sinh bên trong MuMu không thuộc budget ledger của AI Company. Xem [hướng dẫn agent và MuMuAINovel](docs/AI_AGENTS_AND_MUMU_SETUP.md).
+- Novel Workspace native lưu Story Bible, nhân vật, 20 outline, chapter drafts, continuity/open loops và foreshadow ngay trong SQLite local; không có đăng nhập/đăng ký và dùng optimistic version để chống ghi đè. Xem [Novel Workspace](docs/NATIVE_NOVEL_WORKSPACE.md).
+- Cầu nối MuMuAINovel được giữ như integration tùy chọn để export/push project v1.1.0. Core không phụ thuộc vào MuMu; code GPLv3 của upstream không được sao chép vào repo này. Xem [hướng dẫn agent và MuMuAINovel](docs/AI_AGENTS_AND_MUMU_SETUP.md).
 - Hai profile dùng chung logic: `lite` dùng SQLite cục bộ trên máy 4 GB; `standard` dành cho PostgreSQL/RabbitMQ khi máy có đủ tài nguyên.
 - Các bảng đầu tiên cùng migration PostgreSQL, repository và API tạo campaign/story nháp, xem story, duyệt story đã sẵn sàng.
 - Task bền vững với idempotency key, lease, checkpoint và trạng thái chờ xác nhận sau gián đoạn; đã có lõi worker Lite thăm dò database, nhưng chưa nối thành tiến trình vận hành với các handler sản xuất story.

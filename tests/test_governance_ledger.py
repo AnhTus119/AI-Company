@@ -121,7 +121,7 @@ def test_existing_lite_schema_v1_upgrades_without_losing_data(tmp_path) -> None:
     campaign_id = StoryRepository(sessions).create_campaign("Preserved", SourceType.USER_IDEA, 1)
     initialize_lite_schema(sessions)
     with sessions() as session:
-        assert session.execute(text("PRAGMA user_version")).scalar() == 3
+        assert session.execute(text("PRAGMA user_version")).scalar() == 4
         assert session.get(CampaignRow, campaign_id).name == "Preserved"
         assert session.scalar(select(PolicyVersionRow)) is None
         assert session.scalar(select(ModelAssignmentVersionRow)) is None

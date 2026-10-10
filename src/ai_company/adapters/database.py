@@ -50,7 +50,7 @@ class Base(DeclarativeBase):
 
 
 JSON_DOCUMENT = JSON().with_variant(JSONB(), "postgresql")
-LITE_SCHEMA_VERSION = 3
+LITE_SCHEMA_VERSION = 4
 
 
 def utcnow() -> datetime:
@@ -298,6 +298,17 @@ class BudgetReservationRow(Base):
     settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class NovelWorkspaceRow(Base):
+    __tablename__ = "novel_workspaces"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    story_id: Mapped[UUID] = mapped_column(ForeignKey("stories.id"), unique=True, index=True)
+    document: Mapped[dict] = mapped_column(JSON_DOCUMENT)
+    row_version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 def make_session_factory(database_url: str) -> sessionmaker[Session]:
     engine = create_engine(database_url, pool_pre_ping=True)
     if engine.dialect.name == "sqlite":
@@ -345,6 +356,11 @@ def initialize_lite_schema(sessions: sessionmaker[Session]) -> None:
             BudgetReservationRow.__table__,
         ):
             table.create(engine, checkfirst=True)
+        with engine.begin() as connection:
+            connection.exec_driver_sql("PRAGMA user_version=3")
+        version = 3
+    if version == 3:
+        NovelWorkspaceRow.__table__.create(engine, checkfirst=True)
         with engine.begin() as connection:
             connection.exec_driver_sql(f"PRAGMA user_version={LITE_SCHEMA_VERSION}")
         version = LITE_SCHEMA_VERSION
@@ -480,6 +496,111 @@ class StoryRepository:
             session.add(AuditEventRow(entity_type="story", entity_id=story_id,
                                       action="final_approved" if approved else "human_rejected", outcome="ok"))
             return snapshot
+
+
+class NovelWorkspaceRepository:
+    """Durable local novel workspace with optimistic concurrency and audit events."""
+
+    def __init__(self, sessions: sessionmaker[Session]):
+        self.sessions = sessions
+
+    @staticmethod
+    def _view(row: NovelWorkspaceRow) -> dict:
+        return {
+            "workspace_id": str(row.id),
+            "story_id": str(row.story_id),
+            "row_version": row.row_version,
+            "workspace": dict(row.document),
+        }
+
+    def create_or_get(self, story_id: UUID, document: dict) -> dict:
+        if not isinstance(document, dict) or not document:
+            raise DomainError("A novel workspace needs a non-empty document.")
+        try:
+            with self.sessions.begin() as session:
+                if session.get(StoryRow, story_id) is None:
+                    raise DomainError("Story does not exist.")
+                existing = session.scalar(select(NovelWorkspaceRow).where(
+                    NovelWorkspaceRow.story_id == story_id,
+                ))
+                if existing is not None:
+                    return self._view(existing)
+                row = NovelWorkspaceRow(story_id=story_id, document=document)
+                session.add(row)
+                session.flush()
+                session.add(AuditEventRow(
+                    entity_type="novel_workspace", entity_id=row.id,
+                    action="materialized", outcome="ok", details={"story_id": str(story_id)},
+                ))
+                return self._view(row)
+        except IntegrityError:
+            # A repeated local click may race with the first materialization.
+            return self.get(story_id)
+
+    def get(self, story_id: UUID) -> dict:
+        with self.sessions() as session:
+            row = session.scalar(select(NovelWorkspaceRow).where(
+                NovelWorkspaceRow.story_id == story_id,
+            ))
+            if row is None:
+                raise DomainError("Novel workspace does not exist.")
+            return self._view(row)
+
+    def summaries(self, story_ids: tuple[UUID, ...]) -> dict[str, dict]:
+        if not story_ids:
+            return {}
+        with self.sessions() as session:
+            rows = session.scalars(select(NovelWorkspaceRow).where(
+                NovelWorkspaceRow.story_id.in_(story_ids),
+            )).all()
+            return {
+                str(row.story_id): {
+                    "workspace_id": str(row.id),
+                    "row_version": row.row_version,
+                    "chapter_count": len((row.document or {}).get("chapters", [])),
+                    "status": (row.document or {}).get("status", "planning"),
+                }
+                for row in rows
+            }
+
+    def save(
+        self, story_id: UUID, expected_version: int, document: dict,
+        *, action: str, details: dict | None = None,
+    ) -> dict:
+        if expected_version <= 0 or not isinstance(document, dict) or not document:
+            raise DomainError("Workspace update needs a positive version and document.")
+        if not re.fullmatch(r"[a-z0-9_.-]{1,100}", action):
+            raise DomainError("Workspace audit action is invalid.")
+        now = datetime.now(timezone.utc)
+        with self.sessions.begin() as session:
+            updated_version = session.execute(
+                update(NovelWorkspaceRow)
+                .where(
+                    NovelWorkspaceRow.story_id == story_id,
+                    NovelWorkspaceRow.row_version == expected_version,
+                )
+                .values(
+                    document=document,
+                    row_version=NovelWorkspaceRow.row_version + 1,
+                    updated_at=now,
+                )
+                .returning(NovelWorkspaceRow.row_version)
+            ).scalar_one_or_none()
+            if updated_version is None:
+                exists = session.scalar(select(NovelWorkspaceRow.id).where(
+                    NovelWorkspaceRow.story_id == story_id,
+                ))
+                if exists is None:
+                    raise DomainError("Novel workspace does not exist.")
+                raise DomainError("Novel workspace changed; reload it before saving.")
+            row = session.scalar(select(NovelWorkspaceRow).where(
+                NovelWorkspaceRow.story_id == story_id,
+            ))
+            session.add(AuditEventRow(
+                entity_type="novel_workspace", entity_id=row.id,
+                action=action, outcome="ok", details=details or {},
+            ))
+            return self._view(row)
 
 
 class TaskRepository:

@@ -39,7 +39,7 @@
 <body>
   <header>
     <h1>AI Company · Bản thử Lite</h1>
-    <p>Tạo một story thử nghiệm từ ý tưởng của bạn. Toàn bộ kết quả hiện tại là mock, chưa dùng model thật và không được tính là sản phẩm sẵn sàng xuất bản.</p>
+    <p>Tạo story thử nghiệm hoặc dàn ý AI thật, sau đó đưa vào Novel Workspace cục bộ. Không cần tài khoản hay đăng nhập.</p>
   </header>
   <main>
     <div class="notice" id="runtime-notice">Giữ cửa sổ Start-AI-Company mở để web và worker tiếp tục chạy. Bạn có thể đóng trang này; task vẫn nằm trong hàng chờ. Hệ thống tự hoãn bước dựng video nếu RAM khả dụng thấp.</div>
@@ -105,6 +105,8 @@
       const tasks = story.tasks;
       const buttons = [];
       if (!tasks.real_blueprint) buttons.push(actionButton('Tạo dàn ý AI thật (dùng quota/chi phí)', `/stories/${story.id}/real-blueprint`));
+      if (tasks.real_blueprint?.status === 'completed' && !story.novel_workspace)
+        buttons.push(actionButton('Tạo Novel Workspace local', `/stories/${story.id}/novel-workspace`));
       let button;
       if (!tasks.mock_blueprint) button = actionButton('Tạo dàn ý mock', `/stories/${story.id}/mock-blueprint`);
       else if (tasks.mock_blueprint.status === 'completed' && !tasks.mock_chapters)
@@ -117,6 +119,9 @@
       if (buttons.length) { const wrap = element('p'); for (const item of buttons) wrap.append(item, ' '); node.append(wrap); }
       if (tasks.real_blueprint?.status === 'completed') {
         node.append(element('div','path',`Dàn ý AI thật: ${tasks.real_blueprint.title || 'đã hoàn tất'}. Task: ${tasks.real_blueprint.task_id}`));
+      }
+      if (story.novel_workspace) {
+        node.append(element('div','path',`Novel Workspace local · ${story.novel_workspace.chapter_count}/20 chương · version ${story.novel_workspace.row_version} · không cần đăng nhập`));
       }
       if (tasks.mock_package?.directory) {
         const packageTask = tasks.mock_package;
